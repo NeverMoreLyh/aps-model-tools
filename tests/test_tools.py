@@ -147,6 +147,15 @@ class ToolsTest(unittest.TestCase):
         result = generate_table_ddl(self.conn, "DuplicateIndex.bad", "mysql")
         self.assertTrue(result.errors); self.assertEqual("", result.sql)
 
+    def test_ddl_rejects_auto_increment_key_added_only_by_post_create_index(self):
+        table = self.root / "tables/PostIndexIdentity.tables.xml"
+        table.write_text("""<schema id="PostIndexIdentity"><table id="bad" name="bad"><fields>
+          <field id="a" type="Base.U_ID"/><field id="id" type="Base.U_ID" identity="true"/>
+        </fields><indexes><index id="ix" fields="id"/></indexes></table></schema>""", encoding="utf-8")
+        self.conn.close(); scan_workspace(self.root, self.db); self.conn = connect(self.db)
+        result = generate_table_ddl(self.conn, "PostIndexIdentity.bad", "mysql")
+        self.assertTrue(result.errors); self.assertEqual("", result.sql)
+
     def test_impact_groups_type_and_dictionary_consumers(self):
         base = build_impact_report(self.conn, "Base.U_NAME", depth=3)
         self.assertEqual("Base.U_NAME", base["target"]["full_id"])

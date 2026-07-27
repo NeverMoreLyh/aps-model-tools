@@ -271,14 +271,13 @@ def generate_table_ddl(conn: sqlite3.Connection, query: str, dialect: str = "mys
         columns.append(part)
         if fp.get("primarykey", "false").lower() == "true":
             primary.append(field["raw_id"])
-    indexed_fields: set = set(primary)
-    for index in indexes:
-        indexed_fields.update(x for x in _props(index).get("fields", "").replace(",", " ").split() if x)
     if len(identity_fields) > 1:
         errors.append("MySQL allows at most one AUTO_INCREMENT column")
     for identity in identity_fields:
-        if identity not in indexed_fields:
-            errors.append(f"AUTO_INCREMENT column must be indexed: {identity}")
+        # Physical indexes are emitted after CREATE TABLE. They cannot make an
+        # AUTO_INCREMENT declaration valid at table-creation time.
+        if identity not in primary:
+            errors.append(f"AUTO_INCREMENT column must be a primary key in preview DDL: {identity}")
     if errors:
         return DdlResult("", sorted(set(warnings)), sorted(set(errors)), sorted(set(evidence)))
     if primary:

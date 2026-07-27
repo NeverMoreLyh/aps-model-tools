@@ -133,32 +133,32 @@ def _table_indexes(conn: sqlite3.Connection, table: Dict[str, Any]) -> List[Dict
     return result
 
 
-def _resolve_type(conn: sqlite3.Connection, type_id: str, visited: Optional[set] = None) -> Tuple[Optional[str], List[str], List[str]]:
+def _resolve_type_chain(conn: sqlite3.Connection, type_id: str, visited: Optional[set] = None) -> Tuple[Optional[str], Dict[str, Any], List[str], List[str]]:
     visited = visited or set()
     if type_id in visited:
-        return None, [], [f"type cycle: {type_id}"]
+        return None, {}, [], [f"type cycle: {type_id}"]
     visited.add(type_id)
     if type_id in PRIMITIVES:
-        return PRIMITIVES[type_id]({}), [f"primitive:{type_id}"], []
-    nodes = find_nodes(conn, type_id)
-    nodes = [n for n in nodes if n["kind"] == "RESTRICTION_TYPE"]
+        return type_id, {}, [f"primitive:{type_id}"], []
+    nodes = [n for n in find_nodes(conn, type_id) if n["kind"] == "RESTRICTION_TYPE"]
     if len(nodes) != 1:
-        return None, [], [f"unresolved or ambiguous type: {type_id}"]
+        return None, {}, [], [f"unresolved or ambiguous type: {type_id}"]
     node = nodes[0]
-    props = _props(node)
-    base = props.get("base")
+    local = _props(node)
+    base = local.get("base")
     if not base:
-        return None, [node["file_path"]], [f"type has no base: {type_id}"]
-    if base in PRIMITIVES:
-        return PRIMITIVES[base](props), [node["file_path"], f"base:{base}"], []
-    resolved, evidence, errors = _resolve_type(conn, base, visited)
-    if resolved and not errors:
-        # Apply local facets on top of the final primitive where possible.
-        primitive = _primitive_base(conn, base, set())
-        if primitive in PRIMITIVES:
-            merged = dict(props)
-            resolved = PRIMITIVES[primitive](merged)
-    return resolved, [node["file_path"]] + evidence, errors
+        return None, {}, [node["file_path"]], [f"type has no base: {type_id}"]
+    primitive, inherited, evidence, errors = _resolve_type_chain(conn, base, visited)
+    merged = dict(inherited)
+    merged.update({key: value for key, value in local.items() if key != "base" and value != ""})
+    return primitive, merged, [node["file_path"]] + evidence, errors
+
+
+def _resolve_type(conn: sqlite3.Connection, type_id: str, visited: Optional[set] = None) -> Tuple[Optional[str], List[str], List[str]]:
+    primitive, facets, evidence, errors = _resolve_type_chain(conn, type_id, visited)
+    if errors or not primitive or primitive not in PRIMITIVES:
+        return None, evidence, errors or [f"unsupported primitive type: {primitive}"]
+    return PRIMITIVES[primitive](facets), evidence, []
 
 
 def _primitive_base(conn: sqlite3.Connection, type_id: str, visited: set) -> Optional[str]:
@@ -207,6 +207,8 @@ def generate_table_ddl(conn: sqlite3.Connection, query: str, dialect: str = "mys
     props = _props(table)
     table_name = props.get("name") or table["raw_id"]
     fields, inheritance_errors = _expanded_fields(conn, table)
+    if not fields:
+        inheritance_errors.append(f"table has no fields after inheritance expansion: {table['full_id']}")
     indexes = _table_indexes(conn, table)
     columns: List[str] = []
     primary: List[str] = []

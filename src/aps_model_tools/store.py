@@ -49,8 +49,14 @@ CREATE INDEX IF NOT EXISTS idx_edges_to ON edges(to_id);
 """
 
 
-def connect(db_path: Path | str) -> sqlite3.Connection:
+def connect(db_path: Path | str, read_only: bool = False) -> sqlite3.Connection:
     path = Path(db_path)
+    if read_only:
+        if not path.is_file():
+            raise FileNotFoundError(f"index database does not exist: {path}")
+        conn = sqlite3.connect(f"file:{path.resolve()}?mode=ro", uri=True)
+        conn.row_factory = sqlite3.Row
+        return conn
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(path))
     conn.row_factory = sqlite3.Row

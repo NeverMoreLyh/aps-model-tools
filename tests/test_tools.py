@@ -63,6 +63,16 @@ class ToolsTest(unittest.TestCase):
         self.assertTrue(result.errors)
         self.assertEqual("", result.sql)
 
+    def test_ddl_rejects_empty_expanded_table(self):
+        table = self.root / "tables/Empty.tables.xml"
+        table.write_text("""<schema id="Empty"><table id="empty" name="empty"><fields/></table></schema>""", encoding="utf-8")
+        self.conn.close()
+        scan_workspace(self.root, self.db)
+        self.conn = connect(self.db)
+        result = generate_table_ddl(self.conn, "Empty.empty", "mysql")
+        self.assertTrue(result.errors)
+        self.assertEqual("", result.sql)
+
     def test_impact_groups_type_and_dictionary_consumers(self):
         base = build_impact_report(self.conn, "Base.U_NAME", depth=3)
         self.assertEqual("Base.U_NAME", base["target"]["full_id"])

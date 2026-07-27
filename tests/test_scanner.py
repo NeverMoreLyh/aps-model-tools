@@ -12,6 +12,7 @@ FIXTURE_FILES = {
     "datatype/Base.u_schema.xml": """<?xml version="1.0"?>
 <schema id="Base" package="demo.datatype">
   <restrictionType id="U_NAME" base="string" maxLength="40"/>
+  <restrictionType id="U_NAME_CHILD" base="Base.U_NAME"/>
   <restrictionType id="U_STATUS" base="string" maxLength="1"/>
   <restrictionType id="U_ID" base="long"/>
 </schema>
@@ -34,7 +35,7 @@ FIXTURE_FILES = {
   <table id="demo_user" name="demo_user" extension="DemoTables.audit">
     <fields>
       <field id="id" type="Base.U_ID" primarykey="true" nullable="false"/>
-      <field id="name" type="Base.U_NAME" ref="DemoDict.A.name" nullable="false" default="''"/>
+      <field id="name" type="Base.U_NAME_CHILD" ref="DemoDict.A.name" nullable="false" default="''"/>
       <field id="status" type="Base.U_STATUS" ref="DemoDict.E.status" nullable="false"/>
     </fields>
     <odbindexes><index id="odb1" type="unique" fields="id"/></odbindexes>

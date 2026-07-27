@@ -68,7 +68,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             summary = scan_workspace(args.workspace, args.db, args.fail_on_parse_error)
             _json(asdict(summary))
             return 0
-        conn = connect(args.db)
+        conn = connect(args.db, read_only=True)
         try:
             if args.command == "stats":
                 _json(get_stats(conn))

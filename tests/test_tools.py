@@ -5,7 +5,7 @@ from pathlib import Path
 from aps_model_tools.ddl import generate_table_ddl
 from aps_model_tools.impact import build_impact_report
 from aps_model_tools.scanner import scan_workspace
-from aps_model_tools.store import connect
+from aps_model_tools.store import connect, find_nodes
 from tests.test_scanner import FIXTURE_FILES
 
 
@@ -72,6 +72,38 @@ class ToolsTest(unittest.TestCase):
         result = generate_table_ddl(self.conn, "Empty.empty", "mysql")
         self.assertTrue(result.errors)
         self.assertEqual("", result.sql)
+
+    def test_show_resolves_table_id_without_container_ambiguity(self):
+        nodes = find_nodes(self.conn, "DemoTables.demo_user")
+        self.assertEqual(["TABLE"], [node["kind"] for node in nodes])
+
+    def test_ddl_fails_closed_for_empty_index_fields(self):
+        table = self.root / "tables/EmptyIndex.tables.xml"
+        table.write_text("""<schema id="EmptyIndex"><table id="bad" name="bad"><fields>
+          <field id="value" type="string" nullable="true"/>
+        </fields><indexes><index id="idx_empty" type="index" fields=""/></indexes>
+        </table></schema>""", encoding="utf-8")
+        self.conn.close(); scan_workspace(self.root, self.db); self.conn = connect(self.db)
+        result = generate_table_ddl(self.conn, "EmptyIndex.bad", "mysql")
+        self.assertTrue(result.errors); self.assertEqual("", result.sql)
+
+    def test_ddl_rejects_unkeyed_auto_increment(self):
+        table = self.root / "tables/Identity.tables.xml"
+        table.write_text("""<schema id="Identity"><table id="bad" name="bad"><fields>
+          <field id="value" type="Base.U_ID" identity="true" nullable="false"/>
+        </fields></table></schema>""", encoding="utf-8")
+        self.conn.close(); scan_workspace(self.root, self.db); self.conn = connect(self.db)
+        result = generate_table_ddl(self.conn, "Identity.bad", "mysql")
+        self.assertTrue(result.errors); self.assertEqual("", result.sql)
+
+    def test_ddl_rejects_decimal_scale_greater_than_precision(self):
+        datatype = self.root / "datatype/BadDecimal.u_schema.xml"
+        datatype.write_text("""<schema id="BadDecimal"><restrictionType id="U_BAD" base="decimal" dbLength="2" dbFractionDigits="3"/></schema>""", encoding="utf-8")
+        table = self.root / "tables/Decimal.tables.xml"
+        table.write_text("""<schema id="Decimal"><table id="bad" name="bad"><fields><field id="value" type="BadDecimal.U_BAD"/></fields></table></schema>""", encoding="utf-8")
+        self.conn.close(); scan_workspace(self.root, self.db); self.conn = connect(self.db)
+        result = generate_table_ddl(self.conn, "Decimal.bad", "mysql")
+        self.assertTrue(result.errors); self.assertEqual("", result.sql)
 
     def test_impact_groups_type_and_dictionary_consumers(self):
         base = build_impact_report(self.conn, "Base.U_NAME", depth=3)

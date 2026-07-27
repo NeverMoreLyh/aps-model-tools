@@ -157,7 +157,7 @@ def _parse_file(conn: sqlite3.Connection, workspace: Path, path: Path, suffix: s
         current_full = parent_full
         if creates_node:
             ordinal += 1
-            full_id = (parent_full if tag in CONTAINER_TAGS and not raw_id
+            full_id = ("" if tag in CONTAINER_TAGS and not raw_id
                        else _child_full_id(parent_full, tag, raw_id or root_id, root_id))
             current_stable = _stable(relative, full_id, kind, ordinal)
             current_full = full_id
@@ -173,8 +173,9 @@ def _parse_file(conn: sqlite3.Connection, workspace: Path, path: Path, suffix: s
                 value = attrs.get(attr)
                 if value:
                     _insert_edge(conn, current_stable, relation, relative, value, unresolved_target=value)
+        child_parent_full = (parent_full if tag in CONTAINER_TAGS and not raw_id else current_full)
         for child in list(element):
-            visit(child, current_stable, current_full if creates_node else parent_full)
+            visit(child, current_stable, child_parent_full if creates_node else parent_full)
 
     visit(root, None, "")
     return True
@@ -207,6 +208,8 @@ def scan_workspace(workspace: Path | str, db_path: Path | str, fail_on_parse_err
                 parsed += 1
             else:
                 failed += 1
+        if discovered == 0:
+            raise ValueError(f"workspace contains no recognized APS model files: {root}")
         _resolve_edges(conn)
     stats = get_stats(conn)
     summary = ScanSummary(discovered, parsed, failed, stats["nodes"], stats["edges"], stats["unresolved"])

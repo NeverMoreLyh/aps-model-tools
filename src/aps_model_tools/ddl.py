@@ -40,9 +40,11 @@ class DdlResult:
     evidence: List[str]
 
 
-def _decimal(props: Dict[str, Any]) -> str:
-    precision = int(props.get("dbLength") or props.get("maxLength") or 38)
-    scale = int(props.get("dbFractionDigits") or props.get("fractionDigits") or 0)
+def _decimal(p: Dict[str, Any]) -> str:
+    precision = int(p.get("dbLength") or p.get("maxLength") or 38)
+    scale = int(p.get("dbFractionDigits") or p.get("fractionDigits") or 0)
+    if precision < 1 or precision > 65 or scale < 0 or scale > 30 or scale > precision:
+        raise ValueError(f"invalid MySQL DECIMAL facets: precision={precision}, scale={scale}")
     return f"DECIMAL({precision},{scale})"
 
 
@@ -158,7 +160,10 @@ def _resolve_type(conn: sqlite3.Connection, type_id: str, visited: Optional[set]
     primitive, facets, evidence, errors = _resolve_type_chain(conn, type_id, visited)
     if errors or not primitive or primitive not in PRIMITIVES:
         return None, evidence, errors or [f"unsupported primitive type: {primitive}"]
-    return PRIMITIVES[primitive](facets), evidence, []
+    try:
+        return PRIMITIVES[primitive](facets), evidence, []
+    except (TypeError, ValueError) as exc:
+        return None, evidence, [f"invalid type facets for {type_id}: {exc}"]
 
 
 def _primitive_base(conn: sqlite3.Connection, type_id: str, visited: set) -> Optional[str]:
@@ -216,6 +221,7 @@ def generate_table_ddl(conn: sqlite3.Connection, query: str, dialect: str = "mys
     errors: List[str] = list(inheritance_errors)
     evidence = [table["file_path"]]
     field_names = {field["raw_id"] for field in fields}
+    identity_fields: List[str] = []
     for field in fields:
         fp = _props(field)
         type_id = fp.get("type")
@@ -244,9 +250,18 @@ def generate_table_ddl(conn: sqlite3.Connection, query: str, dialect: str = "mys
             part += " DEFAULT " + _format_default(default_value, sql_type)
         if fp.get("identity", "false").lower() == "true":
             part += " AUTO_INCREMENT"
+            identity_fields.append(field["raw_id"])
         columns.append(part)
         if fp.get("primarykey", "false").lower() == "true":
             primary.append(field["raw_id"])
+    indexed_fields: set = set(primary)
+    for index in indexes:
+        indexed_fields.update(x for x in _props(index).get("fields", "").replace(",", " ").split() if x)
+    if len(identity_fields) > 1:
+        errors.append("MySQL allows at most one AUTO_INCREMENT column")
+    for identity in identity_fields:
+        if identity not in indexed_fields:
+            errors.append(f"AUTO_INCREMENT column must be indexed: {identity}")
     if errors:
         return DdlResult("", sorted(set(warnings)), sorted(set(errors)), sorted(set(evidence)))
     if primary:
@@ -257,6 +272,9 @@ def generate_table_ddl(conn: sqlite3.Connection, query: str, dialect: str = "mys
         ip = _props(index)
         raw_fields = ip.get("fields", "")
         index_fields = [x for x in raw_fields.replace(",", " ").split() if x]
+        if not index_fields:
+            errors.append(f"index {index['raw_id']} has no fields")
+            continue
         missing = [x for x in index_fields if x not in field_names]
         if missing:
             errors.append(f"index {index['raw_id']} references missing fields: {', '.join(missing)}")

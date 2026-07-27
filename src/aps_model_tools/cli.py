@@ -26,6 +26,13 @@ def _resolve_one(conn, query: str) -> Dict[str, Any]:
     return nodes[0]
 
 
+def _positive_depth(value: str) -> int:
+    depth = int(value)
+    if depth < 1:
+        raise argparse.ArgumentTypeError("depth must be >= 1")
+    return depth
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="aps-model", description="Read-only APS metadata model tools")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -46,12 +53,12 @@ def build_parser() -> argparse.ArgumentParser:
     refs.add_argument("query")
     refs.add_argument("--db", required=True, type=Path)
     refs.add_argument("--direction", choices=["in", "out", "both"], default="both")
-    refs.add_argument("--depth", type=int, default=1)
+    refs.add_argument("--depth", type=_positive_depth, default=1)
 
     impact = sub.add_parser("impact")
     impact.add_argument("query")
     impact.add_argument("--db", required=True, type=Path)
-    impact.add_argument("--depth", type=int, default=3)
+    impact.add_argument("--depth", type=_positive_depth, default=3)
 
     ddl = sub.add_parser("ddl")
     ddl.add_argument("query")

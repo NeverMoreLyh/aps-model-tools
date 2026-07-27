@@ -94,6 +94,12 @@ class ScannerTest(unittest.TestCase):
         with self.assertRaises(FileNotFoundError):
             scan_workspace(missing, self.db)
 
+    def test_scan_rejects_empty_workspace(self):
+        empty = self.root / "empty"
+        empty.mkdir()
+        with self.assertRaises(ValueError):
+            scan_workspace(empty, self.db)
+
     def test_scan_is_idempotent(self):
         first = scan_workspace(self.root, self.db)
         second = scan_workspace(self.root, self.db)

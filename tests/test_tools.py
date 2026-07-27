@@ -167,6 +167,22 @@ class ToolsTest(unittest.TestCase):
         self.assertEqual([], result.errors)
         self.assertEqual(2, result.sql.count("DEFAULT 'O''Reilly'"))
 
+    def test_ddl_rejects_non_mysql_numeric_default_literals(self):
+        for model_id, sql_type, value in [
+            ("NanDefault", "Base.U_ID", "nan"),
+            ("InfDefault", "Base.U_ID", "inf"),
+            ("UnderscoreDefault", "Base.U_ID", "1_000"),
+        ]:
+            table = self.root / f"tables/{model_id}.tables.xml"
+            table.write_text(f"""<schema id="{model_id}"><table id="bad" name="bad"><fields>
+              <field id="value" type="{sql_type}" default="{value}"/>
+            </fields></table></schema>""", encoding="utf-8")
+        self.conn.close(); scan_workspace(self.root, self.db); self.conn = connect(self.db)
+        for model_id in ("NanDefault", "InfDefault", "UnderscoreDefault"):
+            result = generate_table_ddl(self.conn, f"{model_id}.bad", "mysql")
+            self.assertTrue(result.errors, model_id)
+            self.assertEqual("", result.sql, model_id)
+
     def test_impact_groups_type_and_dictionary_consumers(self):
         base = build_impact_report(self.conn, "Base.U_NAME", depth=3)
         self.assertEqual("Base.U_NAME", base["target"]["full_id"])

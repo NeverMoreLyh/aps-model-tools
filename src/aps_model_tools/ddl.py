@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import re
 import sqlite3
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -207,11 +208,9 @@ def _format_default(value: Any, sql_type: str) -> str:
     if upper in {"NULL", "CURRENT_TIMESTAMP", "CURRENT_DATE", "CURRENT_TIME"}:
         return upper
     if sql_type.startswith(("TINYINT", "SMALLINT", "MEDIUMINT", "INT", "BIGINT", "DECIMAL", "DOUBLE", "FLOAT")):
-        try:
-            float(raw)
-            return raw
-        except ValueError:
+        if not re.fullmatch(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?", raw):
             raise ValueError(f"invalid numeric default {raw!r} for {sql_type}")
+        return raw
     if (raw.startswith("'") and raw.endswith("'")) or (raw.startswith('"') and raw.endswith('"')):
         raw = raw[1:-1]
     return "'" + raw.replace("'", "''") + "'"

@@ -206,14 +206,14 @@ def _format_default(value: Any, sql_type: str) -> str:
     upper = raw.upper()
     if upper in {"NULL", "CURRENT_TIMESTAMP", "CURRENT_DATE", "CURRENT_TIME"}:
         return upper
-    if (raw.startswith("'") and raw.endswith("'")) or (raw.startswith('"') and raw.endswith('"')):
-        return raw
-    if sql_type.startswith(("TINYINT", "SMALLINT", "INT", "BIGINT", "DECIMAL", "DOUBLE", "FLOAT")):
+    if sql_type.startswith(("TINYINT", "SMALLINT", "MEDIUMINT", "INT", "BIGINT", "DECIMAL", "DOUBLE", "FLOAT")):
         try:
             float(raw)
             return raw
         except ValueError:
-            pass
+            raise ValueError(f"invalid numeric default {raw!r} for {sql_type}")
+    if (raw.startswith("'") and raw.endswith("'")) or (raw.startswith('"') and raw.endswith('"')):
+        raw = raw[1:-1]
     return "'" + raw.replace("'", "''") + "'"
 
 
@@ -262,7 +262,10 @@ def generate_table_ddl(conn: sqlite3.Connection, query: str, dialect: str = "mys
                     default_present = True
                     default_value = dict_props["default"]
         if default_present and default_value != "":
-            part += " DEFAULT " + _format_default(default_value, sql_type)
+            try:
+                part += " DEFAULT " + _format_default(default_value, sql_type)
+            except ValueError as exc:
+                errors.append(f"invalid default for {field['full_id']}: {exc}")
         if fp.get("identity", "false").lower() == "true":
             if not sql_type.startswith(("TINYINT", "SMALLINT", "MEDIUMINT", "INT", "BIGINT")):
                 errors.append(f"AUTO_INCREMENT requires integer type: {field['full_id']} is {sql_type}")

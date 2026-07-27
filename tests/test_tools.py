@@ -156,6 +156,17 @@ class ToolsTest(unittest.TestCase):
         result = generate_table_ddl(self.conn, "PostIndexIdentity.bad", "mysql")
         self.assertTrue(result.errors); self.assertEqual("", result.sql)
 
+    def test_ddl_escapes_apostrophe_in_quoted_and_unquoted_string_defaults(self):
+        table = self.root / "tables/QuotedDefault.tables.xml"
+        table.write_text("""<schema id="QuotedDefault"><table id="sample" name="sample"><fields>
+          <field id="quoted" type="string" default="&apos;O&apos;Reilly&apos;"/>
+          <field id="plain" type="string" default="O&apos;Reilly"/>
+        </fields></table></schema>""", encoding="utf-8")
+        self.conn.close(); scan_workspace(self.root, self.db); self.conn = connect(self.db)
+        result = generate_table_ddl(self.conn, "QuotedDefault.sample", "mysql")
+        self.assertEqual([], result.errors)
+        self.assertEqual(2, result.sql.count("DEFAULT 'O''Reilly'"))
+
     def test_impact_groups_type_and_dictionary_consumers(self):
         base = build_impact_report(self.conn, "Base.U_NAME", depth=3)
         self.assertEqual("Base.U_NAME", base["target"]["full_id"])

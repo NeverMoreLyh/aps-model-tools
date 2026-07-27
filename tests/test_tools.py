@@ -123,6 +123,30 @@ class ToolsTest(unittest.TestCase):
         result = generate_table_ddl(self.conn, "StringIdentity.bad", "mysql")
         self.assertTrue(result.errors); self.assertEqual("", result.sql)
 
+    def test_ddl_rejects_mysql_string_lengths_above_declared_limits(self):
+        datatype = self.root / "datatype/TooLong.u_schema.xml"
+        datatype.write_text("""<schema id="TooLong">
+          <restrictionType id="U_VARCHAR" base="string" maxLength="65536"/>
+          <restrictionType id="U_CHAR" base="fixString" maxLength="256"/>
+        </schema>""", encoding="utf-8")
+        table = self.root / "tables/TooLong.tables.xml"
+        table.write_text("""<schema id="TooLongTable"><table id="bad" name="bad"><fields>
+          <field id="v" type="TooLong.U_VARCHAR"/><field id="c" type="TooLong.U_CHAR"/>
+        </fields></table></schema>""", encoding="utf-8")
+        self.conn.close(); scan_workspace(self.root, self.db); self.conn = connect(self.db)
+        result = generate_table_ddl(self.conn, "TooLongTable.bad", "mysql")
+        self.assertTrue(result.errors); self.assertEqual("", result.sql)
+
+    def test_ddl_rejects_duplicate_physical_index_names(self):
+        table = self.root / "tables/DuplicateIndex.tables.xml"
+        table.write_text("""<schema id="DuplicateIndex"><table id="bad" name="bad"><fields>
+          <field id="a" type="string"/><field id="b" type="string"/>
+        </fields><indexes><index id="ix" fields="a"/><index id="ix" fields="b"/></indexes>
+        </table></schema>""", encoding="utf-8")
+        self.conn.close(); scan_workspace(self.root, self.db); self.conn = connect(self.db)
+        result = generate_table_ddl(self.conn, "DuplicateIndex.bad", "mysql")
+        self.assertTrue(result.errors); self.assertEqual("", result.sql)
+
     def test_impact_groups_type_and_dictionary_consumers(self):
         base = build_impact_report(self.conn, "Base.U_NAME", depth=3)
         self.assertEqual("Base.U_NAME", base["target"]["full_id"])

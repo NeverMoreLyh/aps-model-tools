@@ -8,19 +8,19 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 from .store import find_nodes
 
 
-def _positive_length(p: Dict[str, Any], default: int, label: str) -> int:
+def _positive_length(p: Dict[str, Any], default: int, label: str, maximum: int) -> int:
     length = int(p.get("maxLength") or p.get("dbLength") or default)
-    if length < 1:
-        raise ValueError(f"invalid {label} length: {length}")
+    if length < 1 or length > maximum:
+        raise ValueError(f"invalid {label} length: {length}; expected 1..{maximum}")
     return length
 
 
 def _varchar(p: Dict[str, Any], default: int = 255) -> str:
-    return f"VARCHAR({_positive_length(p, default, 'VARCHAR')})"
+    return f"VARCHAR({_positive_length(p, default, 'VARCHAR', 65535)})"
 
 
 def _char(p: Dict[str, Any], default: int = 1) -> str:
-    return f"CHAR({_positive_length(p, default, 'CHAR')})"
+    return f"CHAR({_positive_length(p, default, 'CHAR', 255)})"
 
 
 PRIMITIVES = {
@@ -285,7 +285,12 @@ def generate_table_ddl(conn: sqlite3.Connection, query: str, dialect: str = "mys
         columns.append("  PRIMARY KEY (" + ", ".join(_quote(x, dialect) for x in primary) + ")")
     lines = ["-- APS model DDL preview only; not executed.", f"-- source: {table['file_path']}",
              f"CREATE TABLE {_quote(table_name, dialect)} (", ",\n".join(columns), ");"]
+    index_names: set = set()
     for index in indexes:
+        if index["raw_id"] in index_names:
+            errors.append(f"duplicate physical index name: {index['raw_id']}")
+            continue
+        index_names.add(index["raw_id"])
         ip = _props(index)
         raw_fields = ip.get("fields", "")
         index_fields = [x for x in raw_fields.replace(",", " ").split() if x]

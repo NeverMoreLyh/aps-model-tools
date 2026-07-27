@@ -8,13 +8,28 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 from .store import find_nodes
 
 
+def _positive_length(p: Dict[str, Any], default: int, label: str) -> int:
+    length = int(p.get("maxLength") or p.get("dbLength") or default)
+    if length < 1:
+        raise ValueError(f"invalid {label} length: {length}")
+    return length
+
+
+def _varchar(p: Dict[str, Any], default: int = 255) -> str:
+    return f"VARCHAR({_positive_length(p, default, 'VARCHAR')})"
+
+
+def _char(p: Dict[str, Any], default: int = 1) -> str:
+    return f"CHAR({_positive_length(p, default, 'CHAR')})"
+
+
 PRIMITIVES = {
-    "string": lambda p: f"VARCHAR({int(p.get('maxLength') or p.get('dbLength') or 255)})",
-    "encString": lambda p: f"VARCHAR({int(p.get('maxLength') or p.get('dbLength') or 255)})",
-    "fixString": lambda p: f"CHAR({int(p.get('maxLength') or p.get('dbLength') or 1)})",
-    "cString": lambda p: f"VARCHAR({int(p.get('maxLength') or p.get('dbLength') or 255)})",
-    "eString": lambda p: f"VARCHAR({int(p.get('maxLength') or p.get('dbLength') or 255)})",
-    "dateString": lambda p: f"VARCHAR({int(p.get('maxLength') or p.get('dbLength') or 32)})",
+    "string": lambda p: _varchar(p),
+    "encString": lambda p: _varchar(p),
+    "fixString": lambda p: _char(p),
+    "cString": lambda p: _varchar(p),
+    "eString": lambda p: _varchar(p),
+    "dateString": lambda p: _varchar(p, 32),
     "byte": lambda p: "TINYINT",
     "boolean": lambda p: "TINYINT(1)",
     "int": lambda p: "INT",
@@ -249,6 +264,8 @@ def generate_table_ddl(conn: sqlite3.Connection, query: str, dialect: str = "mys
         if default_present and default_value != "":
             part += " DEFAULT " + _format_default(default_value, sql_type)
         if fp.get("identity", "false").lower() == "true":
+            if not sql_type.startswith(("TINYINT", "SMALLINT", "MEDIUMINT", "INT", "BIGINT")):
+                errors.append(f"AUTO_INCREMENT requires integer type: {field['full_id']} is {sql_type}")
             part += " AUTO_INCREMENT"
             identity_fields.append(field["raw_id"])
         columns.append(part)

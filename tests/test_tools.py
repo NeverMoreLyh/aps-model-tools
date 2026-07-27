@@ -105,6 +105,24 @@ class ToolsTest(unittest.TestCase):
         result = generate_table_ddl(self.conn, "Decimal.bad", "mysql")
         self.assertTrue(result.errors); self.assertEqual("", result.sql)
 
+    def test_ddl_rejects_non_positive_string_length(self):
+        datatype = self.root / "datatype/BadString.u_schema.xml"
+        datatype.write_text("""<schema id="BadString"><restrictionType id="U_BAD" base="string" maxLength="-1"/></schema>""", encoding="utf-8")
+        table = self.root / "tables/BadString.tables.xml"
+        table.write_text("""<schema id="BadStringTable"><table id="bad" name="bad"><fields><field id="value" type="BadString.U_BAD"/></fields></table></schema>""", encoding="utf-8")
+        self.conn.close(); scan_workspace(self.root, self.db); self.conn = connect(self.db)
+        result = generate_table_ddl(self.conn, "BadStringTable.bad", "mysql")
+        self.assertTrue(result.errors); self.assertEqual("", result.sql)
+
+    def test_ddl_rejects_auto_increment_on_non_integer_type(self):
+        table = self.root / "tables/StringIdentity.tables.xml"
+        table.write_text("""<schema id="StringIdentity"><table id="bad" name="bad"><fields>
+          <field id="value" type="Base.U_NAME" identity="true" primarykey="true" nullable="false"/>
+        </fields></table></schema>""", encoding="utf-8")
+        self.conn.close(); scan_workspace(self.root, self.db); self.conn = connect(self.db)
+        result = generate_table_ddl(self.conn, "StringIdentity.bad", "mysql")
+        self.assertTrue(result.errors); self.assertEqual("", result.sql)
+
     def test_impact_groups_type_and_dictionary_consumers(self):
         base = build_impact_report(self.conn, "Base.U_NAME", depth=3)
         self.assertEqual("Base.U_NAME", base["target"]["full_id"])

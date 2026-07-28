@@ -10,7 +10,7 @@ PYTHONPATH=src python3 -m aps_model_tools scan \
   --db .data/v87-models-v2.db
 ```
 
-`scan` is a full rebuild and upgrades legacy indexes by rebuilding them as schema V2.
+`scan` is a full rebuild and upgrades known APS legacy indexes by rebuilding them as schema V2. It refuses databases containing unrelated tables; use a dedicated index path.
 
 ## Incrementally sync source changes
 

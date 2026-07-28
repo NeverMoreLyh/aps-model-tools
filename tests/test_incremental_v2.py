@@ -20,6 +20,18 @@ class IncrementalV2Test(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
+    def test_full_scan_refuses_database_with_unrelated_tables(self):
+        unrelated = Path(self.tmp.name) / "unrelated.db"
+        conn = connect(unrelated, initialize=False)
+        conn.execute("create table customer_data(value text)")
+        conn.execute("insert into customer_data values('keep')")
+        conn.commit(); conn.close()
+        with self.assertRaisesRegex(ValueError, "non-APS tables"):
+            scan_workspace(self.root, unrelated)
+        verify = connect(unrelated, initialize=False)
+        self.assertEqual("keep", verify.execute("select value from customer_data").fetchone()[0])
+        verify.close()
+
     def test_duplicate_contains_edges_are_preserved(self):
         duplicate = self.root / "type/Duplicate.c_schema.xml"
         duplicate.parent.mkdir(parents=True, exist_ok=True)

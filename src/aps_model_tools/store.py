@@ -72,6 +72,11 @@ def _schema_version(conn: sqlite3.Connection) -> int:
 
 def initialize_schema(conn: sqlite3.Connection, reset: bool = False) -> None:
     if reset:
+        existing = {row[0] for row in conn.execute("select name from sqlite_schema where type='table' and name not like 'sqlite_%'")}
+        known = {"edges", "nodes", "model_files", "scan_state"}
+        unknown = existing - known
+        if unknown:
+            raise ValueError(f"refusing to rebuild database with non-APS tables: {', '.join(sorted(unknown))}")
         conn.executescript("""
         PRAGMA foreign_keys=OFF;
         DROP TABLE IF EXISTS edges;

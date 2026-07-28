@@ -43,6 +43,27 @@ class IncrementalV2Test(unittest.TestCase):
         self.assertIsNotNone(edge['to_id'])
         conn.close()
 
+    def test_fail_on_parse_error_does_not_publish_failed_scan(self):
+        scan_workspace(self.root, self.db)
+        before = self.db.read_bytes()
+        broken = self.root / "datatype/Base.u_schema.xml"
+        broken.write_text("<schema", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "failed to parse"):
+            scan_workspace(self.root, self.db, fail_on_parse_error=True)
+        self.assertEqual(before, self.db.read_bytes())
+
+    def test_full_scan_refuses_same_named_non_aps_schema(self):
+        fake = Path(self.tmp.name) / "fake.db"
+        conn = connect(fake, initialize=False)
+        conn.execute("create table nodes(secret text)")
+        conn.execute("insert into nodes values('KEEP_ME')")
+        conn.commit(); conn.close()
+        with self.assertRaisesRegex(ValueError, "non-APS|identity"):
+            scan_workspace(self.root, fake)
+        verify = connect(fake, initialize=False)
+        self.assertEqual("KEEP_ME", verify.execute("select secret from nodes").fetchone()[0])
+        verify.close()
+
     def test_full_scan_failure_preserves_previous_index(self):
         from unittest.mock import patch
         import aps_model_tools.scanner as scanner
@@ -62,7 +83,7 @@ class IncrementalV2Test(unittest.TestCase):
         conn.execute("create table customer_data(value text)")
         conn.execute("insert into customer_data values('keep')")
         conn.commit(); conn.close()
-        with self.assertRaisesRegex(ValueError, "non-APS tables"):
+        with self.assertRaisesRegex(ValueError, "valid APS index identity"):
             scan_workspace(self.root, unrelated)
         verify = connect(unrelated, initialize=False)
         self.assertEqual("keep", verify.execute("select value from customer_data").fetchone()[0])

@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Dict, Iterator, Optional, Tuple
 import xml.etree.ElementTree as ET
 
-from .store import SCHEMA_VERSION, connect, get_stats, initialize_schema
+from .store import SCHEMA_VERSION, connect, get_stats, initialize_schema, is_aps_index
 
 SUFFIXES = (
     ".flowtrans.xml", ".nsql.xml", ".batchStep.xml", ".batchgroup.xml",
@@ -222,13 +222,11 @@ def scan_workspace(workspace: Path | str, db_path: Path | str, fail_on_parse_err
         raise ValueError(f"workspace contains no recognized APS model files: {root}")
     target = Path(db_path).resolve()
     target.parent.mkdir(parents=True, exist_ok=True)
-    if target.exists():
+    if target.exists() and target.stat().st_size > 0:
         check = connect(target, initialize=False)
         try:
-            existing = {row[0] for row in check.execute("select name from sqlite_schema where type='table' and name not like 'sqlite_%'")}
-            unknown = existing - {"edges", "nodes", "model_files", "scan_state"}
-            if unknown:
-                raise ValueError(f"refusing to rebuild database with non-APS tables: {', '.join(sorted(unknown))}")
+            if not is_aps_index(check):
+                raise ValueError("refusing to rebuild database without a valid APS index identity")
         finally:
             check.close()
     fd, temp_name = tempfile.mkstemp(prefix=target.name + ".", suffix=".tmp", dir=str(target.parent))
@@ -243,6 +241,8 @@ def scan_workspace(workspace: Path | str, db_path: Path | str, fail_on_parse_err
             _resolve_edges(conn)
             conn.execute("insert or replace into scan_state(id,workspace,scanner_version) values(1,?,?)", (str(root), SCANNER_VERSION))
         summary = _summary(conn, len(files))
+        if fail_on_parse_error and summary.failed_files:
+            raise ValueError(f"{summary.failed_files} model file(s) failed to parse")
         conn.close()
         conn = None
         os.replace(temp_path, target)
@@ -251,8 +251,6 @@ def scan_workspace(workspace: Path | str, db_path: Path | str, fail_on_parse_err
             conn.close()
         if temp_path.exists():
             temp_path.unlink()
-    if fail_on_parse_error and summary.failed_files:
-        raise ValueError(f"{summary.failed_files} model file(s) failed to parse")
     return summary
 
 

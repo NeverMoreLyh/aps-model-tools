@@ -70,6 +70,21 @@ def _schema_version(conn: sqlite3.Connection) -> int:
     return int(conn.execute("pragma user_version").fetchone()[0])
 
 
+def is_aps_index(conn: sqlite3.Connection) -> bool:
+    if _schema_version(conn) not in {1, SCHEMA_VERSION}:
+        return False
+    required = {
+        "model_files": {"path", "suffix", "content_hash", "parse_status"},
+        "nodes": {"stable_id", "kind", "raw_id", "full_id", "properties_json"},
+        "edges": {"relation_kind", "confidence"},
+    }
+    for table, columns in required.items():
+        actual = {row[1] for row in conn.execute(f"pragma table_info({table})")}
+        if not columns.issubset(actual):
+            return False
+    return True
+
+
 def initialize_schema(conn: sqlite3.Connection, reset: bool = False) -> None:
     if reset:
         existing = {row[0] for row in conn.execute("select name from sqlite_schema where type='table' and name not like 'sqlite_%'")}

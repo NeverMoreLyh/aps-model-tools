@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional
 
 from .ddl import generate_table_ddl
 from .impact import build_impact_report
-from .scanner import scan_workspace
+from .scanner import scan_workspace, sync_workspace, workspace_status
 from .store import connect, find_nodes, get_stats, references
 
 
@@ -42,6 +42,15 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument("--db", required=True, type=Path)
     scan.add_argument("--fail-on-parse-error", action="store_true")
 
+    sync = sub.add_parser("sync")
+    sync.add_argument("--workspace", required=True, type=Path)
+    sync.add_argument("--db", required=True, type=Path)
+    sync.add_argument("--fail-on-parse-error", action="store_true")
+
+    status = sub.add_parser("status")
+    status.add_argument("--workspace", required=True, type=Path)
+    status.add_argument("--db", required=True, type=Path)
+
     stats = sub.add_parser("stats")
     stats.add_argument("--db", required=True, type=Path)
 
@@ -74,6 +83,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         if args.command == "scan":
             summary = scan_workspace(args.workspace, args.db, args.fail_on_parse_error)
             _json(asdict(summary))
+            return 0
+        if args.command == "sync":
+            summary = sync_workspace(args.workspace, args.db, args.fail_on_parse_error)
+            _json(asdict(summary))
+            return 0
+        if args.command == "status":
+            _json(asdict(workspace_status(args.workspace, args.db)))
             return 0
         conn = connect(args.db, read_only=True)
         try:

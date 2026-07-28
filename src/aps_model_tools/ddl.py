@@ -6,7 +6,7 @@ import re
 import sqlite3
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from .store import find_nodes
+from .store import NODE_SELECT, find_nodes
 
 
 def _positive_length(p: Dict[str, Any], default: int, label: str, maximum: int) -> int:
@@ -80,12 +80,15 @@ def _resolve_one(conn: sqlite3.Connection, query: str, expected_kind: Optional[s
 
 
 def _children(conn: sqlite3.Connection, owner_id: str, kind: Optional[str] = None) -> List[Dict[str, Any]]:
-    params: List[Any] = [owner_id]
-    sql = "select * from nodes where owner_id=?"
+    owner = conn.execute("select id from nodes where stable_id=?", (owner_id,)).fetchone()
+    if not owner:
+        return []
+    params: List[Any] = [owner[0]]
+    sql = NODE_SELECT + " where n.owner_node_id=?"
     if kind:
-        sql += " and kind=?"
+        sql += " and n.kind=?"
         params.append(kind)
-    sql += " order by full_id"
+    sql += " order by n.full_id"
     result = []
     for row in conn.execute(sql, params).fetchall():
         item = dict(row)
@@ -134,14 +137,13 @@ def _expanded_fields(conn: sqlite3.Connection, table: Dict[str, Any], visited: O
 def _table_indexes(conn: sqlite3.Connection, table: Dict[str, Any]) -> List[Dict[str, Any]]:
     # `<odbindexes>` drives generated DAO operations, not physical initialization DDL.
     rows = conn.execute(
-        """select n.* from nodes n
-           join nodes container on container.stable_id=n.owner_id
+        NODE_SELECT + """ join nodes container on container.id=n.owner_node_id
            where n.kind='INDEX'
              and container.xml_tag='indexes'
-             and (container.owner_id=? or container.owner_id in
-                  (select stable_id from nodes where owner_id=?))
+             and (container.owner_node_id=? or container.owner_node_id in
+                  (select id from nodes where owner_node_id=?))
            order by n.full_id,n.stable_id""",
-        (table["stable_id"], table["stable_id"]),
+        (table["id"], table["id"]),
     ).fetchall()
     result = []
     for row in rows:

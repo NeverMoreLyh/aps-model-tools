@@ -2,15 +2,13 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
+from typing import Dict, Iterator, Optional, Tuple
 import xml.etree.ElementTree as ET
 
-from .store import connect, get_stats
-
+from .store import SCHEMA_VERSION, connect, get_stats, initialize_schema
 
 SUFFIXES = (
     ".flowtrans.xml", ".nsql.xml", ".batchStep.xml", ".batchgroup.xml",
@@ -23,11 +21,11 @@ SUFFIXES = (
     ".workflow.xml", ".transtest.xml",
 )
 EXCLUDED_DIRS = {".git", "target", ".idea", ".codegraph", ".hermes", "node_modules"}
-
+SCANNER_VERSION = "2"
 
 TAG_KIND = {
     "schema": "SCHEMA", "restrictionType": "RESTRICTION_TYPE", "enumeration": "ENUM_VALUE",
-    "complexType": "DICTIONARY" , "element": "ELEMENT", "table": "TABLE", "field": "FIELD",
+    "complexType": "DICTIONARY", "element": "ELEMENT", "table": "TABLE", "field": "FIELD",
     "sqls": "SQL_GROUP", "select": "NAMED_SQL", "dynamicSelect": "NAMED_SQL",
     "insert": "NAMED_SQL", "update": "NAMED_SQL", "delete": "NAMED_SQL",
     "procedure": "NAMED_SQL", "ddl": "NAMED_SQL", "serviceType": "SERVICE_TYPE",
@@ -57,13 +55,34 @@ class ScanSummary:
     unresolved: int
 
 
+@dataclass(frozen=True)
+class WorkspaceStatus:
+    added: int
+    modified: int
+    deleted: int
+    unchanged: int
+    up_to_date: bool
+
+
+@dataclass(frozen=True)
+class SyncSummary:
+    added: int
+    modified: int
+    deleted: int
+    unchanged: int
+    parsed_files: int
+    failed_files: int
+    nodes: int
+    edges: int
+    unresolved: int
+
+
 def _local(tag: str) -> str:
     return tag.rsplit("}", 1)[-1]
 
 
 def recognized_suffix(path: Path) -> Optional[str]:
-    name = path.name
-    matches = [suffix for suffix in SUFFIXES if name.endswith(suffix)]
+    matches = [suffix for suffix in SUFFIXES if path.name.endswith(suffix)]
     return max(matches, key=len) if matches else None
 
 
@@ -76,18 +95,15 @@ def discover_model_files(workspace: Path) -> Iterator[Tuple[Path, str]]:
             yield path, suffix
 
 
-def _hash(path: Path) -> str:
+def _hash(path: Path) -> bytes:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
-    return digest.hexdigest()
+    return digest.digest()
 
 
 def _stable(file_path: str, full_id: str, kind: str, ordinal: int) -> str:
-    # Full IDs are not globally unique for every nested XML node (for example,
-    # ODB and DB indexes can intentionally reuse an ID). Preserve both nodes
-    # instead of aborting the scan; `full_id` remains separately queryable.
     identity = f"{file_path}#{ordinal}:{full_id}" if full_id else f"{file_path}#{ordinal}"
     return f"model:{kind}:{identity}"
 
@@ -110,14 +126,14 @@ def _kind(tag: str, attrs: Dict[str, str]) -> str:
     return TAG_KIND.get(tag, tag.upper())
 
 
-def _insert_edge(conn: sqlite3.Connection, from_id: str, relation: str, evidence_path: str,
-                 evidence_value: str, unresolved_target: Optional[str] = None,
-                 to_id: Optional[str] = None, confidence: str = "CERTAIN") -> None:
+def _insert_edge(conn: sqlite3.Connection, from_node_id: int, relation: str, file_id: int,
+                 evidence_value: str, raw_target: Optional[str] = None,
+                 to_node_id: Optional[int] = None, confidence: str = "CERTAIN") -> None:
     conn.execute(
         """insert or ignore into edges
-           (from_id,to_id,unresolved_target,relation_kind,evidence_path,evidence_value,confidence)
-           values (?,?,?,?,?,?,?)""",
-        (from_id, to_id, unresolved_target, relation, evidence_path, evidence_value, confidence),
+        (from_node_id,to_node_id,raw_target,relation_kind,evidence_file_id,evidence_value,confidence)
+        values(?,?,?,?,?,?,?)""",
+        (from_node_id, to_node_id, raw_target, relation, file_id, evidence_value, confidence),
     )
 
 
@@ -126,94 +142,150 @@ def _parse_file(conn: sqlite3.Connection, workspace: Path, path: Path, suffix: s
     content_hash = _hash(path)
     conn.execute("delete from model_files where path=?", (relative,))
     try:
-        tree = ET.parse(path)
-        root = tree.getroot()
+        root = ET.parse(path).getroot()
     except (ET.ParseError, OSError) as exc:
         conn.execute(
             "insert into model_files(path,suffix,content_hash,parse_status,error_message) values(?,?,?,?,?)",
             (relative, suffix, content_hash, "PARSE_FAILED", str(exc)),
         )
         return False
-
     root_tag = _local(root.tag)
     root_id = root.attrib.get("id", "")
     package = root.attrib.get("package", "")
-    conn.execute(
+    cursor = conn.execute(
         """insert into model_files(path,suffix,content_hash,parse_status,root_name,model_id,package_name)
-           values(?,?,?,?,?,?,?)""",
+        values(?,?,?,?,?,?,?)""",
         (relative, suffix, content_hash, "PARSED", root_tag, root_id, package),
     )
-
+    file_id = cursor.lastrowid
     ordinal = 0
 
-    def visit(element: ET.Element, owner_stable: Optional[str], parent_full: str) -> None:
+    def visit(element: ET.Element, owner_node_id: Optional[int], parent_full: str) -> None:
         nonlocal ordinal
         tag = _local(element.tag)
         attrs = dict(element.attrib)
         raw_id = attrs.get("id", "")
         kind = _kind(tag, attrs)
         creates_node = bool(raw_id) or element is root or tag in CONTAINER_TAGS
-        current_stable = owner_stable
+        current_node_id = owner_node_id
         current_full = parent_full
         if creates_node:
             ordinal += 1
-            full_id = ("" if tag in CONTAINER_TAGS and not raw_id
-                       else _child_full_id(parent_full, tag, raw_id or root_id, root_id))
-            current_stable = _stable(relative, full_id, kind, ordinal)
+            full_id = "" if tag in CONTAINER_TAGS and not raw_id else _child_full_id(parent_full, tag, raw_id or root_id, root_id)
+            stable = _stable(relative, full_id, kind, ordinal)
+            current_node_id = conn.execute(
+                """insert into nodes(stable_id,kind,raw_id,full_id,owner_node_id,file_id,xml_tag,properties_json)
+                values(?,?,?,?,?,?,?,?)""",
+                (stable, kind, raw_id or root_id, full_id, owner_node_id, file_id, tag,
+                 json.dumps(attrs, ensure_ascii=False, sort_keys=True, separators=(",", ":"))),
+            ).lastrowid
             current_full = full_id
-            conn.execute(
-                """insert into nodes(stable_id,kind,raw_id,full_id,owner_id,file_path,xml_tag,properties_json)
-                   values(?,?,?,?,?,?,?,?)""",
-                (current_stable, kind, raw_id or root_id, full_id, owner_stable, relative, tag,
-                 json.dumps(attrs, ensure_ascii=False, sort_keys=True)),
-            )
-            if owner_stable:
-                _insert_edge(conn, owner_stable, "CONTAINS", relative, full_id, to_id=current_stable)
+            if owner_node_id is not None:
+                _insert_edge(conn, owner_node_id, "CONTAINS", file_id, full_id, to_node_id=current_node_id)
             for attr, relation in REFERENCE_ATTRS.items():
                 value = attrs.get(attr)
                 if value:
-                    _insert_edge(conn, current_stable, relation, relative, value, unresolved_target=value)
-        child_parent_full = (parent_full if tag in CONTAINER_TAGS and not raw_id else current_full)
+                    _insert_edge(conn, current_node_id, relation, file_id, value, raw_target=value)
+        child_parent_full = parent_full if tag in CONTAINER_TAGS and not raw_id else current_full
         for child in list(element):
-            visit(child, current_stable, child_parent_full if creates_node else parent_full)
+            visit(child, current_node_id, child_parent_full if creates_node else parent_full)
 
     visit(root, None, "")
     return True
 
 
 def _resolve_edges(conn: sqlite3.Connection) -> None:
-    rows = conn.execute("select id,unresolved_target from edges where to_id is null and unresolved_target is not null").fetchall()
-    for row in rows:
-        target = row["unresolved_target"]
-        matches = conn.execute(
-            "select stable_id from nodes where full_id=? order by stable_id limit 2", (target,)
-        ).fetchall()
-        if len(matches) == 1:
-            conn.execute("update edges set to_id=?, unresolved_target=null where id=?", (matches[0][0], row["id"]))
+    conn.execute("update edges set to_node_id=null where raw_target is not null")
+    conn.execute("""update edges set to_node_id=(
+        select min(n.id) from nodes n where n.full_id=edges.raw_target
+        having count(*)=1
+    ) where raw_target is not null""")
+
+
+def _validate_workspace(root: Path) -> None:
+    if not root.is_dir():
+        raise FileNotFoundError(f"workspace directory does not exist: {root}")
+
+
+def _summary(conn: sqlite3.Connection, discovered: int) -> ScanSummary:
+    stats = get_stats(conn)
+    return ScanSummary(discovered, stats["parsed"], stats["parse_failed"], stats["nodes"], stats["edges"], stats["unresolved"])
 
 
 def scan_workspace(workspace: Path | str, db_path: Path | str, fail_on_parse_error: bool = False) -> ScanSummary:
     root = Path(workspace).resolve()
-    if not root.is_dir():
-        raise FileNotFoundError(f"workspace directory does not exist: {root}")
-    conn = connect(db_path)
-    discovered = parsed = failed = 0
-    with conn:
-        conn.execute("delete from edges")
-        conn.execute("delete from nodes")
-        conn.execute("delete from model_files")
-        for path, suffix in discover_model_files(root):
-            discovered += 1
-            if _parse_file(conn, root, path, suffix):
-                parsed += 1
-            else:
-                failed += 1
-        if discovered == 0:
-            raise ValueError(f"workspace contains no recognized APS model files: {root}")
-        _resolve_edges(conn)
-    stats = get_stats(conn)
-    summary = ScanSummary(discovered, parsed, failed, stats["nodes"], stats["edges"], stats["unresolved"])
-    conn.close()
-    if fail_on_parse_error and failed:
-        raise ValueError(f"{failed} model file(s) failed to parse")
+    _validate_workspace(root)
+    files = sorted(discover_model_files(root), key=lambda item: item[0].as_posix())
+    if not files:
+        raise ValueError(f"workspace contains no recognized APS model files: {root}")
+    path = Path(db_path)
+    conn = connect(path, initialize=False)
+    try:
+        with conn:
+            initialize_schema(conn, reset=True)
+            for model_path, suffix in files:
+                _parse_file(conn, root, model_path, suffix)
+            _resolve_edges(conn)
+            conn.execute("insert or replace into scan_state(id,workspace,scanner_version) values(1,?,?)", (str(root), SCANNER_VERSION))
+        summary = _summary(conn, len(files))
+    finally:
+        conn.close()
+    if fail_on_parse_error and summary.failed_files:
+        raise ValueError(f"{summary.failed_files} model file(s) failed to parse")
     return summary
+
+
+def _change_set(root: Path, conn: sqlite3.Connection):
+    discovered = {path.relative_to(root).as_posix(): (path, suffix, _hash(path))
+                  for path, suffix in discover_model_files(root)}
+    if not discovered:
+        raise ValueError(f"workspace contains no recognized APS model files: {root}")
+    existing = {row["path"]: bytes(row["content_hash"]) for row in conn.execute("select path,content_hash from model_files")}
+    added = sorted(set(discovered) - set(existing))
+    deleted = sorted(set(existing) - set(discovered))
+    modified = sorted(path for path in set(existing) & set(discovered) if existing[path] != discovered[path][2])
+    unchanged = len(discovered) - len(added) - len(modified)
+    return discovered, added, modified, deleted, unchanged
+
+
+def workspace_status(workspace: Path | str, db_path: Path | str) -> WorkspaceStatus:
+    root = Path(workspace).resolve()
+    _validate_workspace(root)
+    conn = connect(db_path, read_only=True)
+    try:
+        state = conn.execute("select workspace from scan_state where id=1").fetchone()
+        if state and Path(state[0]).resolve() != root:
+            raise ValueError(f"index belongs to another workspace: {state[0]}")
+        _, added, modified, deleted, unchanged = _change_set(root, conn)
+        return WorkspaceStatus(len(added), len(modified), len(deleted), unchanged, not (added or modified or deleted))
+    finally:
+        conn.close()
+
+
+def sync_workspace(workspace: Path | str, db_path: Path | str, fail_on_parse_error: bool = False) -> SyncSummary:
+    root = Path(workspace).resolve()
+    _validate_workspace(root)
+    conn = connect(db_path)
+    try:
+        state = conn.execute("select workspace from scan_state where id=1").fetchone()
+        if state and Path(state[0]).resolve() != root:
+            raise ValueError(f"index belongs to another workspace: {state[0]}")
+        discovered, added, modified, deleted, unchanged = _change_set(root, conn)
+        with conn:
+            for path in deleted:
+                conn.execute("delete from model_files where path=?", (path,))
+            for path in modified:
+                conn.execute("delete from model_files where path=?", (path,))
+            for path in added + modified:
+                model_path, suffix, _ = discovered[path]
+                _parse_file(conn, root, model_path, suffix)
+            _resolve_edges(conn)
+            conn.execute("insert or replace into scan_state(id,workspace,scanner_version) values(1,?,?)", (str(root), SCANNER_VERSION))
+        stats = get_stats(conn)
+        result = SyncSummary(len(added), len(modified), len(deleted), unchanged,
+                             stats["parsed"], stats["parse_failed"], stats["nodes"], stats["edges"], stats["unresolved"])
+    finally:
+        conn.close()
+    if fail_on_parse_error and result.failed_files:
+        raise ValueError(f"{result.failed_files} model file(s) failed to parse")
+    return result

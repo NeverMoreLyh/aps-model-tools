@@ -4,7 +4,7 @@ from collections import Counter
 from typing import Any, Dict, List
 import sqlite3
 
-from .store import find_nodes, references
+from .store import EDGE_SELECT, find_nodes, references
 
 
 IMPACT_RELATIONS = {
@@ -28,17 +28,18 @@ def build_impact_report(conn: sqlite3.Connection, query: str, depth: int = 3) ->
     target = _resolve_one(conn, query)
     graph = references(conn, target["stable_id"], "in", depth)
     edges = [e for e in graph["edges"] if e["relation_kind"] in IMPACT_RELATIONS]
-    affected_ids = {e["from_id"] for e in edges if e["from_id"] != target["stable_id"]}
-    affected = [n for n in graph["nodes"] if n["stable_id"] in affected_ids]
+    affected_node_ids = {e["from_node_id"] for e in edges if e["from_id"] != target["stable_id"]}
+    affected_stable_ids = {e["from_id"] for e in edges if e["from_id"] != target["stable_id"]}
+    affected = [n for n in graph["nodes"] if n["stable_id"] in affected_stable_ids]
     summary = Counter(e["relation_kind"] for e in edges)
     questions = [
         e for e in conn.execute(
-            "select * from edges where from_id in ({}) and to_id is null and unresolved_target is not null".format(
-                ",".join("?" for _ in affected_ids) if affected_ids else "''"
+            EDGE_SELECT + " where e.from_node_id in ({}) and e.to_node_id is null and e.raw_target is not null".format(
+                ",".join("?" for _ in affected_node_ids) if affected_node_ids else "''"
             ),
-            list(affected_ids),
+            list(affected_node_ids),
         ).fetchall()
-    ] if affected_ids else []
+    ] if affected_node_ids else []
     return {
         "target": target,
         "summary": dict(summary),

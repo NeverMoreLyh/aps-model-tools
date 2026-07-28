@@ -130,7 +130,7 @@ def _insert_edge(conn: sqlite3.Connection, from_node_id: int, relation: str, fil
                  evidence_value: str, raw_target: Optional[str] = None,
                  to_node_id: Optional[int] = None, confidence: str = "CERTAIN") -> None:
     conn.execute(
-        """insert or ignore into edges
+        """insert into edges
         (from_node_id,to_node_id,raw_target,relation_kind,evidence_file_id,evidence_value,confidence)
         values(?,?,?,?,?,?,?)""",
         (from_node_id, to_node_id, raw_target, relation, file_id, evidence_value, confidence),

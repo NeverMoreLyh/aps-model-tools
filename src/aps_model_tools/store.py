@@ -46,7 +46,6 @@ CREATE TABLE IF NOT EXISTS edges (
     evidence_file_id INTEGER NOT NULL,
     evidence_value TEXT,
     confidence TEXT NOT NULL,
-    UNIQUE(from_node_id, relation_kind, evidence_file_id, evidence_value, raw_target, to_node_id),
     FOREIGN KEY(from_node_id) REFERENCES nodes(id) ON DELETE CASCADE,
     FOREIGN KEY(to_node_id) REFERENCES nodes(id) ON DELETE SET NULL,
     FOREIGN KEY(evidence_file_id) REFERENCES model_files(id) ON DELETE CASCADE

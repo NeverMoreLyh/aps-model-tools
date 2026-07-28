@@ -20,6 +20,16 @@ class IncrementalV2Test(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
+    def test_duplicate_contains_edges_are_preserved(self):
+        duplicate = self.root / "type/Duplicate.c_schema.xml"
+        duplicate.parent.mkdir(parents=True, exist_ok=True)
+        duplicate.write_text("""<schema id="Duplicate"><complexType id="T"><element id="same" type="string"/><element id="same" type="string"/></complexType></schema>""", encoding="utf-8")
+        scan_workspace(self.root, self.db)
+        conn = connect(self.db, read_only=True)
+        owner = conn.execute("select id from nodes where full_id='Duplicate.T'").fetchone()[0]
+        self.assertEqual(2, conn.execute("select count(*) from edges where from_node_id=? and relation_kind='CONTAINS' and evidence_value='Duplicate.T.same'", (owner,)).fetchone()[0])
+        conn.close()
+
     def test_v2_schema_uses_integer_edge_references_and_file_ids(self):
         scan_workspace(self.root, self.db)
         conn = connect(self.db, read_only=True)
@@ -71,6 +81,28 @@ class IncrementalV2Test(unittest.TestCase):
         self.assertEqual([], conn.execute("select 1 from nodes where full_id='DemoDict.A.name'").fetchall())
         self.assertEqual(1, conn.execute("select count(*) from nodes where full_id='Base.U_NAME'").fetchone()[0])
         conn.close()
+
+    def test_sync_rolls_back_all_file_changes_on_unexpected_failure(self):
+        from unittest.mock import patch
+        import aps_model_tools.scanner as scanner
+        scan_workspace(self.root, self.db)
+        before = connect(self.db, read_only=True)
+        before_counts = get_stats(before)
+        before.close()
+        target = self.root / "datatype/Base.u_schema.xml"
+        target.write_text(target.read_text(encoding="utf-8").replace('maxLength="40"', 'maxLength="41"'), encoding="utf-8")
+        original = scanner._parse_file
+        def fail_after_delete(conn, workspace, path, suffix):
+            original(conn, workspace, path, suffix)
+            raise RuntimeError("boom")
+        with patch.object(scanner, "_parse_file", side_effect=fail_after_delete):
+            with self.assertRaises(RuntimeError):
+                sync_workspace(self.root, self.db)
+        after = connect(self.db, read_only=True)
+        self.assertEqual(before_counts, get_stats(after))
+        old_props = after.execute("select properties_json from nodes where full_id='Base.U_NAME'").fetchone()[0]
+        self.assertIn('40', old_props)
+        after.close()
 
     def test_sync_parse_failure_replaces_only_changed_file(self):
         scan_workspace(self.root, self.db)

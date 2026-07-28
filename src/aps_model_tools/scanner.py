@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sqlite3
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterator, Optional, Tuple
@@ -218,8 +220,21 @@ def scan_workspace(workspace: Path | str, db_path: Path | str, fail_on_parse_err
     files = sorted(discover_model_files(root), key=lambda item: item[0].as_posix())
     if not files:
         raise ValueError(f"workspace contains no recognized APS model files: {root}")
-    path = Path(db_path)
-    conn = connect(path, initialize=False)
+    target = Path(db_path).resolve()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.exists():
+        check = connect(target, initialize=False)
+        try:
+            existing = {row[0] for row in check.execute("select name from sqlite_schema where type='table' and name not like 'sqlite_%'")}
+            unknown = existing - {"edges", "nodes", "model_files", "scan_state"}
+            if unknown:
+                raise ValueError(f"refusing to rebuild database with non-APS tables: {', '.join(sorted(unknown))}")
+        finally:
+            check.close()
+    fd, temp_name = tempfile.mkstemp(prefix=target.name + ".", suffix=".tmp", dir=str(target.parent))
+    os.close(fd)
+    temp_path = Path(temp_name)
+    conn = connect(temp_path, initialize=False)
     try:
         with conn:
             initialize_schema(conn, reset=True)
@@ -228,8 +243,14 @@ def scan_workspace(workspace: Path | str, db_path: Path | str, fail_on_parse_err
             _resolve_edges(conn)
             conn.execute("insert or replace into scan_state(id,workspace,scanner_version) values(1,?,?)", (str(root), SCANNER_VERSION))
         summary = _summary(conn, len(files))
-    finally:
         conn.close()
+        conn = None
+        os.replace(temp_path, target)
+    finally:
+        if conn is not None:
+            conn.close()
+        if temp_path.exists():
+            temp_path.unlink()
     if fail_on_parse_error and summary.failed_files:
         raise ValueError(f"{summary.failed_files} model file(s) failed to parse")
     return summary
@@ -238,9 +259,9 @@ def scan_workspace(workspace: Path | str, db_path: Path | str, fail_on_parse_err
 def _change_set(root: Path, conn: sqlite3.Connection):
     discovered = {path.relative_to(root).as_posix(): (path, suffix, _hash(path))
                   for path, suffix in discover_model_files(root)}
-    if not discovered:
-        raise ValueError(f"workspace contains no recognized APS model files: {root}")
     existing = {row["path"]: bytes(row["content_hash"]) for row in conn.execute("select path,content_hash from model_files")}
+    if not discovered and not existing:
+        raise ValueError(f"workspace contains no recognized APS model files: {root}")
     added = sorted(set(discovered) - set(existing))
     deleted = sorted(set(existing) - set(discovered))
     modified = sorted(path for path in set(existing) & set(discovered) if existing[path] != discovered[path][2])

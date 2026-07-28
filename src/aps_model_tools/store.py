@@ -129,7 +129,8 @@ from nodes n join model_files f on f.id=n.file_id
 left join nodes owner on owner.id=n.owner_node_id"""
 
 EDGE_SELECT = """select e.id,src.stable_id as from_id,dst.stable_id as to_id,
-       e.from_node_id,e.to_node_id,e.raw_target as unresolved_target,e.raw_target,
+       e.from_node_id,e.to_node_id,
+       case when e.to_node_id is null then e.raw_target end as unresolved_target,e.raw_target,
        e.relation_kind,f.path as evidence_path,e.evidence_file_id,
        e.evidence_value,e.confidence
 from edges e join nodes src on src.id=e.from_node_id

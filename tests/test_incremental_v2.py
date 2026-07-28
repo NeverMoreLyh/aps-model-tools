@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 
 from aps_model_tools.scanner import scan_workspace, sync_workspace, workspace_status
-from aps_model_tools.store import connect, get_stats
+from aps_model_tools.store import connect, get_stats, references
 from tests.test_scanner import FIXTURE_FILES
 
 
@@ -19,6 +19,42 @@ class IncrementalV2Test(unittest.TestCase):
 
     def tearDown(self):
         self.tmp.cleanup()
+
+    def test_sync_deletes_last_model_file(self):
+        single_root = Path(self.tmp.name) / "single"
+        only = single_root / "Only.u_schema.xml"
+        only.parent.mkdir(parents=True, exist_ok=True)
+        only.write_text('<schema id="Only"><restrictionType id="U" base="string"/></schema>', encoding="utf-8")
+        single_db = Path(self.tmp.name) / "single.db"
+        scan_workspace(single_root, single_db)
+        only.unlink()
+        summary = sync_workspace(single_root, single_db)
+        self.assertEqual(1, summary.deleted)
+        self.assertEqual(0, summary.nodes)
+        self.assertEqual(0, summary.edges)
+
+    def test_resolved_edge_exposes_raw_target_but_not_unresolved_target(self):
+        scan_workspace(self.root, self.db)
+        conn = connect(self.db, read_only=True)
+        source = conn.execute("select stable_id from nodes where full_id='DemoTables.demo_user.name'").fetchone()[0]
+        edge = next(e for e in references(conn, source, 'out', 1)['edges'] if e['relation_kind']=='TYPE_REF')
+        self.assertEqual('Base.U_NAME_CHILD', edge['raw_target'])
+        self.assertIsNone(edge['unresolved_target'])
+        self.assertIsNotNone(edge['to_id'])
+        conn.close()
+
+    def test_full_scan_failure_preserves_previous_index(self):
+        from unittest.mock import patch
+        import aps_model_tools.scanner as scanner
+        scan_workspace(self.root, self.db)
+        before = connect(self.db, read_only=True)
+        before_counts = get_stats(before); before.close()
+        with patch.object(scanner, "_parse_file", side_effect=RuntimeError("boom")):
+            with self.assertRaises(RuntimeError):
+                scan_workspace(self.root, self.db)
+        after = connect(self.db, read_only=True)
+        self.assertEqual(before_counts, get_stats(after))
+        after.close()
 
     def test_full_scan_refuses_database_with_unrelated_tables(self):
         unrelated = Path(self.tmp.name) / "unrelated.db"

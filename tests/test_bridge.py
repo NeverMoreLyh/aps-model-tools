@@ -44,6 +44,11 @@ class BridgeTest(unittest.TestCase):
             "demo::cn.sunline.ltts.busi.apbase.tables.SysParmTable.OtherDao",
             "ap-base/src/main/java/demo/Unrelated.java", "java", 4, 4, 0, 60,
             "import cn.sunline.ltts.busi.apbase.tables.SysParmTable.OtherDao;"))
+        conn.execute("insert into nodes values(?,?,?,?,?,?,?,?,?,?,?)", (
+            "import:suffix", "import", "cn.sunline.ltts.busi.apbase.tables.SysParmTable.Kapb_txn_log_rlvcDao",
+            "demo::cn.sunline.ltts.busi.apbase.tables.SysParmTable.Kapb_txn_log_rlvcDao",
+            "ap-base/src/main/java/demo/Suffix.java", "java", 5, 5, 0, 75,
+            "import cn.sunline.ltts.busi.apbase.tables.SysParmTable.Kapb_txn_log_rlvcDao;"))
         conn.commit(); conn.close()
 
     def tearDown(self):
@@ -58,7 +63,8 @@ class BridgeTest(unittest.TestCase):
         self.assertEqual("CERTAIN", links["cn.sunline.ltts.busi.apbase.tables.SysParmTable.kapb_txn_log"]["confidence"])
         self.assertEqual("ap-base/src/main/java/demo/Consumer.java", report["code_consumers"][0]["file_path"])
         self.assertEqual("CERTAIN", report["code_consumers"][0]["confidence"])
-        self.assertNotIn("Unrelated.java", {item["file_path"] for item in report["code_consumers"]})
+        self.assertFalse(any(item["file_path"].endswith("Unrelated.java") for item in report["code_consumers"]))
+        self.assertFalse(any(item["file_path"].endswith("Suffix.java") for item in report["code_consumers"]))
 
     def test_codegraph_database_is_opened_immutable_read_only(self):
         before = self.codegraph.read_bytes()

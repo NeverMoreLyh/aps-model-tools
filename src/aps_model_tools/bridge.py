@@ -93,9 +93,9 @@ def _codegraph_consumers(repository: str, db_path: Path, symbols: Iterable[str])
         for symbol in symbols:
             rows = conn.execute(
                 """select id,kind,name,qualified_name,file_path,language,start_line,end_line,signature
-                   from nodes where language='java' and (name=? or name=? or signature like ?)
+                   from nodes where language='java' and (name=? or name=?)
                    order by file_path,start_line,id""",
-                (symbol, symbol.rsplit(".", 1)[-1], f"%{symbol}%"),
+                (symbol, symbol.rsplit(".", 1)[-1]),
             ).fetchall()
             for row in rows:
                 item = dict(row)

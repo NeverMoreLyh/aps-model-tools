@@ -98,8 +98,9 @@ def _java_packages(workspace: Path) -> List[Dict[str, Any]]:
     for entry in grouped.values():
         scores = entry.pop("capability_scores")
         ordered = [item[0] for item in scores.most_common()]
-        entry.update({"capabilities": ordered, "primary_capability": ordered[0] if ordered else "UNCLASSIFIED",
-                      "mixed_capabilities": len(ordered) > 1,
+        entry.update({"capabilities": ordered, "primary_capability": ordered[0] if len(ordered) == 1 else "QUESTION",
+                      "candidate_mixed_capabilities": len(ordered) > 1,
+                      "classification": "CANDIDATE" if ordered else "UNCLASSIFIED",
                       "classes": sorted(entry["classes"])})
         result.append(entry)
     return sorted(result, key=lambda item: (item["repository"], item["package"]))
@@ -135,38 +136,66 @@ def audit_capabilities(aps_db: Path | str, workspace: Path | str) -> Dict[str, A
     model_files = []
     for entry in files.values():
         capabilities = sorted(entry.pop("matches"))
-        entry.update({"capabilities": capabilities, "mixed_capabilities": len(capabilities) > 1,
-                      "classification": "DERIVED" if capabilities else "UNCLASSIFIED"})
+        entry.update({"capabilities": capabilities, "candidate_mixed_capabilities": len(capabilities) > 1,
+                      "classification": "CANDIDATE" if capabilities else "UNCLASSIFIED"})
         model_files.append(entry)
     model_files.sort(key=lambda item: item["path"])
     java_packages = _java_packages(root)
+    model_by_capability = defaultdict(list)
+    for item in model_files:
+        for capability in item["capabilities"]:
+            model_by_capability[capability].append({"model_id": item["model_id"], "path": item["path"],
+                                                    "classification": item["classification"]})
+    java_by_capability = defaultdict(list)
+    for item in java_packages:
+        for capability in item["capabilities"]:
+            java_by_capability[capability].append({"repository": item["repository"], "package": item["package"],
+                                                   "classification": item["classification"]})
+    capability_coverage = []
+    for capability, (label, _) in CAPABILITIES.items():
+        model_evidence = model_by_capability[capability]
+        java_evidence = java_by_capability[capability]
+        capability_coverage.append({"id": capability, "label": label,
+            "status": "CANDIDATE" if model_evidence or java_evidence else "NOT_FOUND",
+            "model_evidence": model_evidence, "java_evidence": java_evidence,
+            "question": "需架构负责人结合模型关系、生成物和调用链确认" if model_evidence or java_evidence else "当前关键词证据未发现；不等同能力不存在"})
     return {"workspace": str(root), "capability_catalog": {key: value[0] for key, value in CAPABILITIES.items()},
-            "summary": {"model_files": len(model_files), "mixed_model_files": sum(x["mixed_capabilities"] for x in model_files),
+            "summary": {"model_files": len(model_files), "candidate_mixed_model_files": sum(x["candidate_mixed_capabilities"] for x in model_files),
                         "unclassified_model_files": sum(not x["capabilities"] for x in model_files),
-                        "java_packages": len(java_packages), "mixed_java_packages": sum(x["mixed_capabilities"] for x in java_packages),
-                        "unclassified_java_packages": sum(x["primary_capability"] == "UNCLASSIFIED" for x in java_packages)},
-            "model_files": model_files, "java_packages": java_packages, "parse_failures": failures,
-            "limitations": ["Classification is evidence-based heuristic and requires architecture-owner confirmation.",
-                            "Generated Java is evaluated through model links, not counted as handwritten packages."]}
+                        "java_packages": len(java_packages), "candidate_mixed_java_packages": sum(x["candidate_mixed_capabilities"] for x in java_packages),
+                        "unclassified_java_packages": sum(x["classification"] == "UNCLASSIFIED" for x in java_packages)},
+            "model_files": model_files, "java_packages": java_packages, "capability_coverage": capability_coverage,
+            "parse_failures": failures,
+            "limitations": ["All keyword classifications are CANDIDATE evidence and require architecture-owner confirmation.",
+                            "Generated Java and CodeGraph consumers are not yet inputs to capability classification."]}
 
 
 def render_markdown(report: Mapping[str, Any]) -> str:
     lines = ["# V8.7 元数据与 Java 功能分类现状分析", "", f"- 工作空间：`{report['workspace']}`", "",
              "## 汇总", "", "| 指标 | 数量 |", "| --- | ---: |"]
     for key, value in report["summary"].items(): lines.append(f"| {key} | {value} |")
-    lines += ["", "## 元数据混合热点", ""]
-    mixed = [item for item in report["model_files"] if item["mixed_capabilities"]]
-    if not mixed: lines.append("未识别到多功能模型文件。")
+    lines += ["", "## 35项能力覆盖矩阵", "", "| 能力 | 状态 | 模型候选 | Java候选 | 待确认 |", "| --- | --- | ---: | ---: | --- |"]
+    for item in report["capability_coverage"]:
+        lines.append(f"| {item['label']} | {item['status']} | {len(item['model_evidence'])} | {len(item['java_evidence'])} | {item['question']} |")
+    lines += ["", "## 元数据候选混合热点", ""]
+    mixed = [item for item in report["model_files"] if item["candidate_mixed_capabilities"]]
+    if not mixed: lines.append("未识别到多功能候选模型文件。")
     for item in mixed:
         labels = [report["capability_catalog"][cap] for cap in item["capabilities"]]
         lines += [f"### `{item['model_id'] or item['path']}`", "", f"- 当前文件：`{item['path']}`",
-                  f"- 识别能力：{'、'.join(labels)}", "- 建议目标：按上述能力验证业务边界后拆分；保留稳定共享类型，迁移生成Java和全部引用方。", ""]
+                  f"- 候选能力：{'、'.join(labels)}", "- 候选改进方向：先由架构负责人用模型关系、生成物和调用链确认是否真的混合，再决定保留共享模型或按能力拆分。", ""]
     lines += ["## Java package 分类", "", "| 仓库 | package | 主能力 | 文件数 |", "| --- | --- | --- | ---: |"]
     for item in report["java_packages"]:
         cap = item["primary_capability"]
         label = report["capability_catalog"].get(cap, cap)
         lines.append(f"| {item['repository']} | `{item['package']}` | {label} | {item['files']} |")
-    lines += ["", "## 改进原则", "", "1. 先确认功能边界，再迁移模型、生成Java和手写Java；不按文件大小机械拆分。",
+    lines += ["", "## 解析失败", ""]
+    if report["parse_failures"]:
+        for item in report["parse_failures"]:
+            lines.append(f"- `{item['path']}`：{item['error_message']}")
+    else:
+        lines.append("无。")
+    lines += ["", "## 改进原则", "", "1. 候选分类不是架构事实；先确认功能边界，再迁移模型、生成Java和手写Java。",
               "2. 对 `Common/Tools/Sys` 建立准入条件，能归入具体功能的优先归类。",
               "3. 每次迁移保留旧契约或委托层，验证新旧节点混跑、回滚、模型生成和CodeGraph调用方。", "",
               "## 限制", ""] + [f"- {item}" for item in report["limitations"]]

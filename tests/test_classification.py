@@ -22,13 +22,15 @@ class ClassificationTest(unittest.TestCase):
             report = audit_capabilities(db, root)
             common = next(item for item in report["model_files"] if item["model_id"] == "ApCommonType")
             self.assertEqual({"file-transfer", "data-clean"}, set(common["capabilities"]))
-            self.assertTrue(common["mixed_capabilities"])
+            self.assertTrue(common["candidate_mixed_capabilities"])
             self.assertEqual("security", report["java_packages"][0]["primary_capability"])
             self.assertEqual([], classify_text("cn.demo.spring.engine"))
             self.assertEqual([], classify_text("MappingService ShippingAddress ShoppingCart spinning"))
             markdown = render_markdown(report)
             self.assertIn("ApCommonType", markdown)
-            self.assertIn("建议目标", markdown)
+            self.assertIn("候选改进方向", markdown)
+            self.assertEqual(35, len(report["capability_coverage"]))
+            self.assertTrue({"status", "model_evidence", "java_evidence", "question"}.issubset(report["capability_coverage"][0]))
     def test_classification_rejects_index_from_another_workspace(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); source = root / "source"; other = root / "other"

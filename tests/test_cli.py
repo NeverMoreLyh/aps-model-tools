@@ -24,6 +24,11 @@ class CliTest(unittest.TestCase):
             main(["impact", "anything", "--depth", "-1", "--db", str(self.db)])
         self.assertEqual(2, impact_exit.exception.code)
 
+    def test_bridge_cli_rejects_invalid_codegraph_mapping(self):
+        rc = main(["bridge", "anything", "--workspace", self.tmp.name,
+                   "--db", str(self.db), "--codegraph", "invalid"])
+        self.assertEqual(2, rc)
+
     def test_read_command_rejects_missing_database_without_creating_it(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = Path(tmp) / "missing.db"

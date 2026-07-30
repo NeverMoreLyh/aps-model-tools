@@ -6,6 +6,8 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from .bridge import build_bridge_report
+from .classification import audit_capabilities, render_markdown
 from .ddl import generate_table_ddl
 from .impact import build_impact_report
 from .scanner import scan_workspace, sync_workspace, workspace_status
@@ -74,7 +76,33 @@ def build_parser() -> argparse.ArgumentParser:
     ddl.add_argument("--db", required=True, type=Path)
     ddl.add_argument("--dialect", default="mysql")
     ddl.add_argument("--output", type=Path)
+
+    bridge = sub.add_parser("bridge", help="map APS models to generated Java and CodeGraph consumers")
+    bridge.add_argument("query")
+    bridge.add_argument("--db", required=True, type=Path)
+    bridge.add_argument("--workspace", required=True, type=Path)
+    bridge.add_argument("--codegraph", action="append", default=[], metavar="REPO=DB",
+                        help="repository name and read-only CodeGraph database; repeatable")
+    bridge.add_argument("--output", type=Path)
+
+    classify = sub.add_parser("classify", help="audit APS models and Java packages by functional capability")
+    classify.add_argument("--db", required=True, type=Path)
+    classify.add_argument("--workspace", required=True, type=Path)
+    classify.add_argument("--output", required=True, type=Path)
+    classify.add_argument("--json-output", type=Path)
     return parser
+
+
+def _parse_codegraph_databases(values: List[str]) -> Dict[str, Path]:
+    result: Dict[str, Path] = {}
+    for value in values:
+        repository, separator, database = value.partition("=")
+        if not separator or not repository.strip() or not database.strip():
+            raise ValueError("--codegraph must use REPO=DB")
+        if repository in result:
+            raise ValueError(f"duplicate CodeGraph repository: {repository}")
+        result[repository] = Path(database)
+    return result
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -90,6 +118,29 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 0
         if args.command == "status":
             _json(asdict(workspace_status(args.workspace, args.db)))
+            return 0
+        if args.command == "bridge":
+            result = build_bridge_report(args.db, args.workspace, args.query,
+                                         _parse_codegraph_databases(args.codegraph))
+            if args.output:
+                args.output.parent.mkdir(parents=True, exist_ok=True)
+                args.output.write_text(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+                _json({"output": str(args.output), "summary": {
+                    "generated_links": len(result["generated_links"]),
+                    "code_consumers": len(result["code_consumers"]),
+                }})
+            else:
+                _json(result)
+            return 0
+        if args.command == "classify":
+            result = audit_capabilities(args.db, args.workspace)
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_text(render_markdown(result), encoding="utf-8")
+            if args.json_output:
+                args.json_output.parent.mkdir(parents=True, exist_ok=True)
+                args.json_output.write_text(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            _json({"output": str(args.output), "json_output": str(args.json_output) if args.json_output else None,
+                   "summary": result["summary"]})
             return 0
         conn = connect(args.db, read_only=True)
         try:

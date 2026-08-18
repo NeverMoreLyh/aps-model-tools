@@ -5,9 +5,10 @@ import json
 import os
 import sqlite3
 import tempfile
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterator, Optional, Tuple
+from typing import Dict, Iterator, List, Optional, Tuple
 import xml.etree.ElementTree as ET
 
 from .store import SCHEMA_VERSION, connect, get_stats, initialize_schema, is_aps_index
@@ -142,22 +143,32 @@ def _insert_edge(conn: sqlite3.Connection, from_node_id: int, relation: str, fil
 def _parse_file(conn: sqlite3.Connection, workspace: Path, path: Path, suffix: str) -> bool:
     relative = path.relative_to(workspace).as_posix()
     content_hash = _hash(path)
-    conn.execute("delete from model_files where path=?", (relative,))
     try:
         root = ET.parse(path).getroot()
     except (ET.ParseError, OSError) as exc:
+        conn.execute("delete from model_files where path=?", (relative,))
         conn.execute(
             "insert into model_files(path,suffix,content_hash,parse_status,error_message) values(?,?,?,?,?)",
             (relative, suffix, content_hash, "PARSE_FAILED", str(exc)),
         )
         return False
+    return _register_parsed(conn, relative, suffix, content_hash, root)
+
+
+def _register_parsed(conn: sqlite3.Connection, logical_path: str, suffix: str,
+                     content_hash: bytes, root: ET.Element) -> bool:
+    """Register an already-parsed model document under a logical path.
+
+    Shared by workspace file scanning and Maven dependency jar imports.
+    """
     root_tag = _local(root.tag)
     root_id = root.attrib.get("id", "")
     package = root.attrib.get("package", "")
+    conn.execute("delete from model_files where path=?", (logical_path,))
     cursor = conn.execute(
         """insert into model_files(path,suffix,content_hash,parse_status,root_name,model_id,package_name)
         values(?,?,?,?,?,?,?)""",
-        (relative, suffix, content_hash, "PARSED", root_tag, root_id, package),
+        (logical_path, suffix, content_hash, "PARSED", root_tag, root_id, package),
     )
     file_id = cursor.lastrowid
     ordinal = 0
@@ -174,7 +185,7 @@ def _parse_file(conn: sqlite3.Connection, workspace: Path, path: Path, suffix: s
         if creates_node:
             ordinal += 1
             full_id = "" if tag in CONTAINER_TAGS and not raw_id else _child_full_id(parent_full, tag, raw_id or root_id, root_id)
-            stable = _stable(relative, full_id, kind, ordinal)
+            stable = _stable(logical_path, full_id, kind, ordinal)
             current_node_id = conn.execute(
                 """insert into nodes(stable_id,kind,raw_id,full_id,owner_node_id,file_id,xml_tag,properties_json)
                 values(?,?,?,?,?,?,?,?)""",
@@ -194,6 +205,76 @@ def _parse_file(conn: sqlite3.Connection, workspace: Path, path: Path, suffix: s
 
     visit(root, None, "")
     return True
+
+
+def jar_logical_path(jar: Path, entry: str) -> str:
+    return f"jar:{jar}!/{entry}"
+
+
+def import_jar_models(db_path: Path | str, jars: List[Path | str],
+                      reresolve: bool = True) -> Dict[str, object]:
+    """Import APS model XML documents found inside Maven dependency jars.
+
+    Framework base models (KBaseType, SPType, GeneralFileService*, ...) live in
+    dependency jars, not in the business workspace; the native MavenModelLoader
+    traverses dependency jars for exactly this reason. Entries are registered
+    under logical paths ``jar:<jar>!/<entry>`` so sync never treats them as
+    workspace files.
+    """
+    target = Path(db_path).resolve()
+    conn = connect(target)
+    imported = 0
+    failed = 0
+    skipped = 0
+    per_jar: Dict[str, int] = {}
+    try:
+        with conn:
+            for jar in jars:
+                jar_path = Path(jar).resolve()
+                if not jar_path.is_file():
+                    raise FileNotFoundError(f"jar not found: {jar_path}")
+                count = 0
+                with zipfile.ZipFile(jar_path) as archive:
+                    for info in archive.infolist():
+                        if info.is_dir():
+                            continue
+                        suffix = recognized_suffix(Path(info.filename))
+                        if not suffix:
+                            continue
+                        logical = jar_logical_path(jar_path, info.filename)
+                        data = archive.read(info.filename)
+                        content_hash = hashlib.sha256(data).digest()
+                        try:
+                            root = ET.fromstring(data)
+                        except ET.ParseError as exc:
+                            conn.execute("delete from model_files where path=?", (logical,))
+                            conn.execute(
+                                "insert into model_files(path,suffix,content_hash,parse_status,error_message) values(?,?,?,?,?)",
+                                (logical, suffix, content_hash, "PARSE_FAILED", str(exc)),
+                            )
+                            failed += 1
+                            continue
+                        _register_parsed(conn, logical, suffix, content_hash, root)
+                        imported += 1
+                        count += 1
+                per_jar[str(jar_path)] = count
+                if count == 0:
+                    skipped += 1
+            if reresolve:
+                _resolve_edges(conn)
+        stats = get_stats(conn)
+    finally:
+        conn.close()
+    return {
+        "jars": len(jars),
+        "jars_without_models": skipped,
+        "imported_files": imported,
+        "failed_files": failed,
+        "per_jar": per_jar,
+        "nodes": stats["nodes"],
+        "edges": stats["edges"],
+        "unresolved": stats["unresolved"],
+    }
 
 
 def _resolve_edges(conn: sqlite3.Connection) -> None:
@@ -257,7 +338,11 @@ def scan_workspace(workspace: Path | str, db_path: Path | str, fail_on_parse_err
 def _change_set(root: Path, conn: sqlite3.Connection):
     discovered = {path.relative_to(root).as_posix(): (path, suffix, _hash(path))
                   for path, suffix in discover_model_files(root)}
-    existing = {row["path"]: bytes(row["content_hash"]) for row in conn.execute("select path,content_hash from model_files")}
+    # jar-imported models (logical path prefix "jar:") are dependency artifacts,
+    # never workspace files; they must not participate in workspace diffing.
+    existing = {row["path"]: bytes(row["content_hash"])
+                for row in conn.execute("select path,content_hash from model_files")
+                if not row["path"].startswith("jar:")}
     if not discovered and not existing:
         raise ValueError(f"workspace contains no recognized APS model files: {root}")
     added = sorted(set(discovered) - set(existing))

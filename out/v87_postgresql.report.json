@@ -1,0 +1,42 @@
+{
+  "summary": {
+    "dialect": "postgresql",
+    "tables_generated": 548,
+    "tables_skipped_abstract": 13,
+    "warnings": 29,
+    "errors": 0,
+    "output": "out/v87_postgresql.sql"
+  },
+  "warnings": [
+    "kdpa_acct_info: duplicate table definition (also in aggr-parent/aggr-bcs/src/main/resources/tables/deptbase/ltdeptacct/ltdepttscunk/Kdpa_acct_info.tables.xml), second definition skipped",
+    "kdpa_acct_int_rate: duplicate table definition (also in aggr-parent/aggr-bcs/src/main/resources/tables/deptbase/ltdeptbusiinst/Kdpa_acct_int_rate.tables.xml), second definition skipped",
+    "kdpa_cust_acct_num: duplicate table definition (also in aggr-parent/aggr-bcs/src/main/resources/tables/deptbase/ltdeptacct/ltdepttscunk/Kdpa_cust_acct_num.tables.xml), second definition skipped",
+    "kdpa_cust_acct_num_cmprs: duplicate table definition (also in aggr-parent/aggr-bcs/src/main/resources/tables/deptbase/ltdeptcustacct/Kdpa_cust_acct_num_cmprs.tables.xml), second definition skipped",
+    "kdpb_acct_rstct: duplicate table definition (also in aggr-parent/aggr-bcs/src/main/resources/tables/deptbase/ltdeptbusifroz/Kdpb_acct_rstct.tables.xml), second definition skipped",
+    "kdpb_acct_vita_prd: duplicate table definition (also in aggr-parent/aggr-bcs/src/main/resources/tables/deptbase/ltdeptacct/Kdpb_acct_vita_prd.tables.xml), second definition skipped",
+    "kdpb_dept_ctfct: duplicate table definition (also in aggr-parent/aggr-bcs/src/main/resources/tables/deptbase/ltdeptbusibkrg/Kdpb_dept_ctfct.tables.xml), second definition skipped",
+    "kdpb_imvbl_trfr_in_out: duplicate table definition (also in aggr-parent/aggr-bcs/src/main/resources/tables/deptbase/ltdeptacct/ltdepttscunk/Kdpb_imvbl_trfr_in_out.tables.xml), second definition skipped",
+    "kdpb_prod_asmt: duplicate table definition (also in aggr-parent/aggr-bcs/src/main/resources/tables/deptbase/ltdeptbusiprodasmt/Kdpb_prod_asmt.tables.xml), second definition skipped",
+    "kdpb_spec_dept: duplicate table definition (also in aggr-parent/aggr-bcs/src/main/resources/tables/deptbase/ltdeptbusiprodasmt/Kdpb_spec_dept.tables.xml), second definition skipped",
+    "kdpb_trfr_ownsp: duplicate table definition (also in aggr-parent/aggr-bcs/src/main/resources/tables/deptbase/ltdeptbusibkrg/Kdpb_trfr_ownsp.tables.xml), second definition skipped",
+    "kdpf_basic_attr: duplicate table definition (also in aggr-parent/aggr-bcs/src/main/resources/tables/deptbase/ltdeptproductfactory/Kdpf_basic_attr.tables.xml), second definition skipped",
+    "kdpf_prd_basic_ctrl: duplicate table definition (also in aggr-parent/aggr-bcs/src/main/resources/tables/deptbase/ltdeptproductfactory/Kdpf_prd_basic_ctrl.tables.xml), second definition skipped",
+    "kdpl_acct_org_trfr: duplicate table definition (also in aggr-parent/aggr-bcs/src/main/resources/tables/deptbase/Itdeptorgtrfr/Kdpl_acct_org_trfr.tables.xml), second definition skipped",
+    "kdpl_acct_rstct: duplicate table definition (also in aggr-parent/aggr-bcs/src/main/resources/tables/deptbase/ltdeptbusifroz/Kdpl_acct_rstct.tables.xml), second definition skipped",
+    "kdpl_jrsd_qry_rgstn: duplicate table definition (also in aggr-parent/aggr-bcs/src/main/resources/tables/deptbase/ltdeptbusifroz/Kdpl_jrsd_qry_rgstn.tables.xml), second definition skipped",
+    "kdpl_mod_queg_serl_num: duplicate table definition (also in aggr-parent/aggr-bcs/src/main/resources/tables/deptbase/ltdeptbusifroz/Kdpl_mod_queg_serl_num.tables.xml), second definition skipped",
+    "kdpl_prod_asmt: duplicate table definition (also in aggr-parent/aggr-bcs/src/main/resources/tables/deptbase/ltdeptbusiprodasmt/Kdpl_prod_asmt.tables.xml), second definition skipped",
+    "klna_loan_acct: duplicate table definition (also in aggr-parent/aggr-bcs/src/main/resources/tables/loanbase/lnacctbusi/Klna_loan_acct.tables.xml), second definition skipped",
+    "klnb_acctg_attr: duplicate table definition (also in aggr-parent/aggr-bcs/src/main/resources/tables/loanbase/lnctrct/Klnb_acctg_attr.tables.xml), second definition skipped",
+    "klnb_basic_attr: duplicate table definition (also in aggr-parent/aggr-bcs/src/main/resources/tables/loanbase/lnctrct/Klnb_basic_attr.tables.xml), second definition skipped",
+    "klnb_extd: duplicate table definition (also in aggr-parent/aggr-bcs/src/main/resources/tables/loanbase/lnacctbusi/Klnb_extd.tables.xml), second definition skipped",
+    "klnb_instmt: duplicate table definition (also in aggr-parent/aggr-bcs/src/main/resources/tables/loanbase/lnacctbusi/Klnb_instmt.tables.xml), second definition skipped",
+    "klnb_lendg_attr: duplicate table definition (also in aggr-parent/aggr-bcs/src/main/resources/tables/loanbase/lnctrct/Klnb_lendg_attr.tables.xml), second definition skipped",
+    "klnb_prcg_attr: duplicate table definition (also in aggr-parent/aggr-bcs/src/main/resources/tables/loanbase/lnctrct/Klnb_prcg_attr.tables.xml), second definition skipped",
+    "klnb_rpymt_attr: duplicate table definition (also in aggr-parent/aggr-bcs/src/main/resources/tables/loanbase/lnctrct/Klnb_rpymt_attr.tables.xml), second definition skipped",
+    "klnb_trfr_pay_info: duplicate table definition (also in aggr-parent/aggr-bcs/src/main/resources/tables/loanbase/lnacctbusi/Klnb_trfr_pay_info.tables.xml), second definition skipped",
+    "klnl_subsd_int_ars: duplicate table definition (also in aggr-parent/aggr-bcs/src/main/resources/tables/loanbase/lntrandetl/Klnl_subsd_int_ars.tables.xml), second definition skipped",
+    "koba_off_bal_sheet: duplicate table definition (also in aggr-parent/aggr-bcs/src/main/resources/tables/obsbbase/obacctbusi/Koba_off_bal_sheet.tables.xml), second definition skipped"
+  ],
+  "errors": []
+}

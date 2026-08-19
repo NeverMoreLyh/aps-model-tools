@@ -14,6 +14,7 @@ from .docx import DocExportReport, export_document
 from .impact import build_impact_report
 from .scanner import import_jar_models, scan_workspace, sync_workspace, workspace_status
 from .store import connect, find_nodes, get_stats, references
+from .xlsx_export import ExcelExportReport, export_excel
 
 
 def _json(value: Any) -> None:
@@ -151,6 +152,17 @@ def build_parser() -> argparse.ArgumentParser:
     docexport.add_argument("--tables", nargs="*", default=[], metavar="QUERY",
                            help="optional model queries to filter; default: all")
     docexport.add_argument("--output", type=Path, help="write Markdown to file")
+
+    xls = sub.add_parser("xlsx-export",
+                         help="export model documentation as Excel (.xlsx) files, aggregated by project")
+    xls.add_argument("--db", required=True, type=Path, help="SQLite metadata index")
+    xls.add_argument("--output-dir", required=True, type=Path, help="output directory for .xlsx files")
+    xls.add_argument("--types", nargs="*", default=[],
+                     help="document types to export (default: all). Choices: table, table_list, "
+                          "dict, dict_ref, enum, trans, nsql, service, service_v2, params, "
+                          "error_code, batch_tran")
+    xls.add_argument("--projects", nargs="*", default=[],
+                     help="filter to specific project names (e.g. ap-parent aggr-parent)")
     return parser
 
 
@@ -231,6 +243,32 @@ def main(argv: Optional[List[str]] = None) -> int:
             else:
                 print(markdown)
             return 2 if report.errors else 0
+        if args.command == "xlsx-export":
+            conn = connect(args.db, read_only=True)
+            try:
+                doc_types = args.types or None
+                project_filter = args.projects or None
+                reports = export_excel(conn, str(args.output_dir), doc_types, project_filter)
+            finally:
+                conn.close()
+            _json([{
+                "project": r.project,
+                "output_file": r.output_file,
+                "sheets": r.sheets_generated,
+                "tables": r.tables,
+                "dicts": r.dicts,
+                "enums": r.enums,
+                "trans": r.trans,
+                "nsqls": r.nsqls,
+                "services": r.services,
+                "params": r.params,
+                "error_codes": r.error_codes,
+                "batch_trans": r.batch_trans,
+                "warnings": len(r.warnings),
+                "errors": len(r.errors),
+            } for r in reports])
+            has_errors = any(r.errors for r in reports)
+            return 2 if has_errors else 0
         if args.command == "ddl-gen":
             cfg = DdlGenConfig(
                 dialect=args.dialect,

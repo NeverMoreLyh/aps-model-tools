@@ -10,6 +10,7 @@ from .bridge import build_bridge_report
 from .classification import audit_capabilities, render_markdown
 from .ddl import generate_table_ddl
 from .ddlgen import DdlGenConfig, generate_all_ddl
+from .docx import DocExportReport, export_document
 from .impact import build_impact_report
 from .scanner import import_jar_models, scan_workspace, sync_workspace, workspace_status
 from .store import connect, find_nodes, get_stats, references
@@ -140,6 +141,16 @@ def build_parser() -> argparse.ArgumentParser:
     classify.add_argument("--workspace", required=True, type=Path)
     classify.add_argument("--output", required=True, type=Path)
     classify.add_argument("--json-output", type=Path)
+
+    docexport = sub.add_parser("doc-export",
+                               help="export model documentation as Markdown from the SQLite index")
+    docexport.add_argument("--db", required=True, type=Path, help="SQLite metadata index")
+    docexport.add_argument("--type", default="all",
+                           choices=["all", "table", "dict", "schema", "trans", "nsql", "service"],
+                           help="document type to export (default: all)")
+    docexport.add_argument("--tables", nargs="*", default=[], metavar="QUERY",
+                           help="optional model queries to filter; default: all")
+    docexport.add_argument("--output", type=Path, help="write Markdown to file")
     return parser
 
 
@@ -198,6 +209,28 @@ def main(argv: Optional[List[str]] = None) -> int:
                 return 2
             _json(import_jar_models(args.db, args.jar, reresolve=not args.no_reresolve))
             return 0
+        if args.command == "doc-export":
+            conn = connect(args.db, read_only=True)
+            try:
+                markdown, report = export_document(conn, args.type, args.tables or None)
+            finally:
+                conn.close()
+            if args.output:
+                args.output.parent.mkdir(parents=True, exist_ok=True)
+                args.output.write_text(markdown, encoding="utf-8")
+                _json({"output": str(args.output),
+                       "type": report.doc_type,
+                       "tables": report.tables_exported,
+                       "dicts": report.dicts_exported,
+                       "schemas": report.schemas_exported,
+                       "transactions": report.trans_exported,
+                       "named_sqls": report.nsqls_exported,
+                       "services": report.services_exported,
+                       "warnings": len(report.warnings),
+                       "errors": len(report.errors)})
+            else:
+                print(markdown)
+            return 2 if report.errors else 0
         if args.command == "ddl-gen":
             cfg = DdlGenConfig(
                 dialect=args.dialect,

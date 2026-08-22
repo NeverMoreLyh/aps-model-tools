@@ -50,7 +50,7 @@ Defaults are configurable:
 | Index | `.apsgraph/apsgraph.db` |
 | Cache | `.apsgraph/` |
 
-APSGraph discovers `pom.xml` projects, identifies Maven reactor/aggregator roots, and builds those roots in workspace dependency order, stops on the first failure, rejects different versions of the same dependency artifact ID, and only atomically publishes the completed index. Projects matching `*dist` are excluded from dependency analysis by default; use repeatable `--exclude-project PATTERN` for additional projects and `--no-default-project-excludes` to disable the default rule. Exclusion affects dependency analysis, not reactor builds. Existing indexes remain unchanged when a build, dependency check, or JAR XML import fails.
+APSGraph discovers `pom.xml` projects, identifies Maven reactor/aggregator roots, and builds those roots in workspace dependency order, stops on the first failure, rejects different versions of the same dependency artifact ID, and only atomically publishes the completed index. Projects matching `*dist` are excluded from dependency analysis by default. Workspace rules can be tracked in `.apsgraph.json` (`excludeProjects` or `maven.excludeProjects`), while repeatable `--exclude-project PATTERN` adds command-line overrides and `--no-default-project-excludes` disables the built-in default rule. Exclusion affects dependency analysis, not reactor builds. Existing indexes remain unchanged when a build, dependency check, or JAR XML import fails.
 
 To refresh dependency models in an existing index without rebuilding workspace XML:
 

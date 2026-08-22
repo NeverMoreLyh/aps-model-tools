@@ -263,6 +263,35 @@ class MavenWorkspaceTest(unittest.TestCase):
             record.split(" ", 1)[0] for record in inventory.projects_excluded
         })
 
+    def test_workspace_config_defines_project_exclusion_rules(self):
+        config = self.root / ".apsgraph.json"
+        config.write_text(json.dumps({"maven": {"excludeProjects": ["framework"]}}), encoding="utf-8")
+        args = build_parser().parse_args([
+            "scan", "--include-deps", "--workspace", str(self.root),
+            "--exclude-project", "extra",
+        ])
+        self.assertEqual(["framework", "*dist", "extra"], cli_module._project_excludes(args))
+
+        no_defaults = build_parser().parse_args([
+            "scan", "--include-deps", "--workspace", str(self.root),
+            "--exclude-project", "extra", "--no-default-project-excludes",
+        ])
+        self.assertEqual(["framework", "extra"], cli_module._project_excludes(no_defaults))
+
+        config.write_text(json.dumps({"excludeProjects": ["legacy"]}), encoding="utf-8")
+        self.assertEqual(
+            ["legacy", "*dist"],
+            cli_module._project_excludes(build_parser().parse_args([
+                "scan", "--include-deps", "--workspace", str(self.root)
+            ])),
+        )
+
+        config.write_text(json.dumps({"excludeProjects": [1]}), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "excludeProjects.*array of strings"):
+            cli_module._project_excludes(build_parser().parse_args([
+                "scan", "--include-deps", "--workspace", str(self.root)
+            ]))
+
     def test_dependency_version_conflict_fails_closed(self):
         scan_workspace(self.root, self.db)
         before = self.digest(self.db)

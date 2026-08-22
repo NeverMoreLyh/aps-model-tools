@@ -1,6 +1,6 @@
 # APSGraph 使用说明
 
-> 版本：0.3.0
+> 版本：0.3.1
 > 更新时间：2026-08-22
 > 项目地址：https://github.com/NeverMoreLyh/aps-model-tools
 
@@ -94,6 +94,7 @@ apsgraph scan
 | `--maven` | Maven 可执行文件，默认 `mvn` |
 | `--cache-dir` | workspace 相对缓存目录，默认 `.apsgraph` |
 | `--exclude-project` | 跳过依赖分析的 project glob，可重复；匹配 artifactId 或项目相对路径 |
+| `.apsgraph.json` | workspace 级项目规则文件，可配置 `excludeProjects` 或 `maven.excludeProjects` |
 | `--no-default-project-excludes` | 关闭默认 `*dist` 排除规则 |
 
 普通 `scan` 不要求 Maven。`scan --include-deps` 的流程为：发现全部 `pom.xml`（排除 `target` 等目录）→ 识别 Maven aggregator/reactor 根项目并按 workspace 内依赖关系拓扑排序 → 逐个 reactor 根目录执行默认 `mvn -B -DskipTests install` → 执行 `dependency:list` 与 `dependency:copy-dependencies` → 扫描 workspace XML 并导入依赖 JAR XML → 原子替换最终索引。任一 Maven 项目失败、同一 artifact ID 解析出多个版本、或依赖 XML 解析失败时立即退出，不替换已有索引。
@@ -127,7 +128,25 @@ apsgraph status
 apsgraph scan --include-deps
 ```
 
-默认参数等价于 `--maven-goal install --skip-tests --deps-scope runtime --db .apsgraph/apsgraph.db`，所有参数均可显式覆盖。构建日志位于 `.apsgraph/logs/maven/`，依赖解析日志位于 `.apsgraph/logs/maven-dependencies/`，依赖清单位于 `.apsgraph/dependency-manifest.json`。默认跳过 artifactId 或项目路径匹配 `*dist` 的项目依赖分析；例如 `delivery-dist`、`packaging/*dist`。该规则只影响依赖解析与 JAR 导入，不影响 Maven reactor 构建。可用 `--exclude-project` 增加规则，例如 `--exclude-project 'packaging/*'`；添加 `--no-default-project-excludes` 可关闭默认规则。清单会记录 `projects_analyzed` 与 `projects_excluded`。
+默认参数等价于 `--maven-goal install --skip-tests --deps-scope runtime --db .apsgraph/apsgraph.db`，所有参数均可显式覆盖。构建日志位于 `.apsgraph/logs/maven/`，依赖解析日志位于 `.apsgraph/logs/maven-dependencies/`，依赖清单位于 `.apsgraph/dependency-manifest.json`。可在 workspace 根目录维护 `.apsgraph.json`：
+
+```json
+{
+  "maven": {
+    "excludeProjects": ["legacy-parent", "packaging/*"]
+  }
+}
+```
+
+也支持简化格式：
+
+```json
+{
+  "excludeProjects": ["legacy-parent"]
+}
+```
+
+项目级规则始终生效；默认跳过 artifactId 或项目路径匹配 `*dist` 的项目依赖分析；例如 `delivery-dist`、`packaging/*dist`。该规则只影响依赖解析与 JAR 导入，不影响 Maven reactor 构建。可用 `--exclude-project` 增加规则，例如 `--exclude-project 'packaging/*'`；添加 `--no-default-project-excludes` 可关闭默认规则。清单会记录 `projects_analyzed` 与 `projects_excluded`。
 
 已有索引只需刷新依赖模型时：
 

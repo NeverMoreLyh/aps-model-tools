@@ -48,9 +48,45 @@ DEFAULT_WORKSPACE = Path(".")
 
 
 def _project_excludes(args: argparse.Namespace) -> List[str]:
-    if args.no_default_project_excludes:
-        return list(args.exclude_project)
-    return list(DEFAULT_EXCLUDED_PROJECTS) + list(args.exclude_project)
+    """Combine workspace rules, built-in defaults, and command-line overrides.
+
+    The workspace file is ``.apsgraph.json``.  It may use either form:
+
+    ``{"excludeProjects": ["foo"]}``
+
+    or::
+
+        {"maven": {"excludeProjects": ["foo"]}}
+
+    Project rules always apply.  ``--no-default-project-excludes`` only
+    disables APSGraph's built-in ``*dist`` rule, while repeatable
+    ``--exclude-project`` values are appended last.
+    """
+    configured: List[str] = []
+    config_path = args.workspace / ".apsgraph.json"
+    if config_path.is_file():
+        try:
+            payload = json.loads(config_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"invalid {config_path}: {exc}") from exc
+        if not isinstance(payload, dict):
+            raise ValueError(f"{config_path} must contain a JSON object")
+        value = payload.get("excludeProjects")
+        if value is None and isinstance(payload.get("maven"), dict):
+            value = payload["maven"].get("excludeProjects")
+        if value is None:
+            value = []
+        if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+            raise ValueError(
+                f"{config_path} field 'excludeProjects' must be an array of strings"
+            )
+        configured = value
+
+    rules = list(configured)
+    if not args.no_default_project_excludes:
+        rules.extend(DEFAULT_EXCLUDED_PROJECTS)
+    rules.extend(args.exclude_project)
+    return list(dict.fromkeys(rules))
 
 
 def build_parser() -> argparse.ArgumentParser:

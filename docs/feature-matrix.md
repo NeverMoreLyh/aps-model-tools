@@ -1,6 +1,6 @@
 # APSGraph 功能支持清单
 
-> 版本：0.3.0
+> 版本：0.3.1
 > 更新时间：2026-08-22
 
 ---
@@ -21,7 +21,7 @@
 | Maven workspace 构建 | ✅ | `scan --include-deps` 识别 aggregator 根目录并按依赖拓扑执行默认 `install -DskipTests` |
 | 依赖模型一体化扫描 | ✅ | workspace XML + runtime 依赖 JAR XML，成功后原子发布 |
 | 依赖版本冲突阻断 | ✅ | 同一 artifact ID 出现多个版本立即失败，不部分导入 |
-| 项目依赖分析排除 | ✅ | 默认跳过 `*dist`，支持 `--exclude-project` glob 与关闭默认规则 |
+| 项目依赖分析排除 | ✅ | 默认跳过 `*dist`，支持 `.apsgraph.json` 项目规则、`--exclude-project` glob 与关闭默认规则 |
 | 解析错误记录 | ✅ | 跳过并记录，可选 fail-on-parse-error |
 | 索引归属校验 | ✅ | 拒绝非本工作空间的索引 |
 | 遗留 V1 升级 | ✅ | 自动检测 V1 并重建为 V2 |

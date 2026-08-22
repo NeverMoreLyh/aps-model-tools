@@ -1,6 +1,6 @@
 # APSGraph 技术白皮书
 
-> 版本：0.3.0
+> 版本：0.3.1
 > 更新时间：2026-08-22
 > 项目地址：https://github.com/NeverMoreLyh/aps-model-tools
 

@@ -1,7 +1,7 @@
 # APSGraph 功能支持清单
 
-> 版本：0.4.0
-> 更新时间：2026-08-22
+> 版本：0.5.0
+> 更新时间：2026-08-23
 
 ---
 
@@ -18,12 +18,13 @@
 | 增量同步 | ✅ | SHA-256 文件指纹，单事务增删改 |
 | 同步状态检查 | ✅ | 文件差异统计 |
 | JAR 模型导入 | ✅ | 从 Maven 依赖 JAR 提取框架基础模型 |
-| Maven workspace 构建 | ✅ | `scan --include-deps` 识别 aggregator 根目录并按依赖拓扑执行默认 `install -DskipTests` |
+| Maven workspace 构建 | ✅ | `scan --include-deps` 识别 aggregator 根目录并按依赖拓扑执行默认 `install -DskipTests`，独立 reactor 可通过 `--jobs` 并行 |
 | Maven JDK profile | ✅ | workspace 级 JDK 8/17 规则、CLI 覆盖、`JAVA_HOME` 注入与冲突阻断 |
 | 依赖模型一体化扫描 | ✅ | workspace XML + runtime 依赖 JAR XML，成功后原子发布 |
 | 扫描阶段日志 | ✅ | `scan --include-deps` 在 stderr 输出关键阶段与项目进度，stdout 保持 JSON |
-| 依赖版本冲突阻断 | ✅ | 同一 artifact ID 出现多个版本立即失败，不部分导入 |
-| 项目依赖分析排除 | ✅ | 默认跳过 `*dist`，支持 `.apsgraph.json` 项目规则、`--exclude-project` glob 与关闭默认规则 |
+| Maven 阶段并行 | ✅ | build 与 dependencies 两阶段串行；阶段内独立 reactor/项目按 `--jobs` 并行 |
+| 依赖版本冲突阻断 | ✅ | 同一 `groupId:artifactId` 出现多个版本立即失败；不同 groupId 复用 artifact ID、多项目复用同一版本均不冲突 |
+| 项目依赖分析排除 | ✅ | 默认跳过 `*dist` 与结构性 parent/aggregator POM，支持 `.apsgraph.json` 项目规则、`--exclude-project` glob 与关闭默认规则 |
 | 解析错误记录 | ✅ | 跳过并记录，可选 fail-on-parse-error |
 | 索引归属校验 | ✅ | 拒绝非本工作空间的索引 |
 | 遗留 V1 升级 | ✅ | 自动检测 V1 并重建为 V2 |

@@ -13,6 +13,7 @@ import hashlib
 import inspect
 import json
 import os
+import concurrent.futures
 import re
 import shutil
 import sqlite3
@@ -45,8 +46,12 @@ class MavenError(ValueError):
 class MavenProject:
     path: Path
     artifact_id: str
+    group_id: str
     dependencies: Tuple[str, ...]
+    dependency_coordinates: Tuple[str, ...] = ()
     modules: Tuple[str, ...] = ()
+    packaging: str = "jar"
+    parent_artifact_id: str = ""
 
 
 @dataclass
@@ -301,13 +306,26 @@ def _pom_project(pom: Path) -> MavenProject:
     artifact = root.findtext(tag("artifactId"), default="").strip()
     if not artifact:
         raise MavenError(f"Maven pom.xml has no artifactId: {pom}")
+    parent_root = root.find(tag("parent"))
+    parent_group = ""
+    if parent_root is not None:
+        parent_group = parent_root.findtext(tag("groupId"), default="").strip()
+    # A project may omit groupId and inherit it from its parent.  Although this
+    # is a lightweight POM parse, retaining that inherited identity is enough
+    # to distinguish Maven coordinates without invoking Maven during discovery.
+    group = root.findtext(tag("groupId"), default=parent_group).strip()
     dependencies: List[str] = []
+    dependency_coordinates: List[str] = []
     dependencies_root = root.find(tag("dependencies"))
     if dependencies_root is not None:
         for dependency in dependencies_root.findall(tag("dependency")):
             dependency_artifact = dependency.findtext(tag("artifactId"), default="").strip()
+            dependency_group = dependency.findtext(tag("groupId"), default="").strip()
             if dependency_artifact:
                 dependencies.append(dependency_artifact)
+                dependency_coordinates.append(
+                    f"{dependency_group}:{dependency_artifact}" if dependency_group else f":{dependency_artifact}"
+                )
     modules: List[str] = []
     modules_root = root.find(tag("modules"))
     if modules_root is not None:
@@ -315,12 +333,19 @@ def _pom_project(pom: Path) -> MavenProject:
             module_value = (module.text or "").strip()
             if module_value:
                 modules.append(module_value)
+    parent_artifact = ""
+    if parent_root is not None:
+        parent_artifact = parent_root.findtext(tag("artifactId"), default="").strip()
 
     return MavenProject(
         pom.parent,
         artifact,
+        group,
         tuple(dict.fromkeys(dependencies)),
+        tuple(dict.fromkeys(dependency_coordinates)),
         tuple(dict.fromkeys(modules)),
+        (root.findtext(tag("packaging"), default="jar").strip() or "jar").lower(),
+        parent_artifact,
     )
 
 
@@ -486,6 +511,14 @@ def _resolve_java_home(profile: str, configured_homes: Mapping[str, str]) -> Opt
     )
 
 
+def _project_coordinate(project: MavenProject) -> str:
+    """Return the lightweight Maven identity used for workspace matching."""
+    return (
+        f"{project.group_id}:{project.artifact_id}"
+        if project.group_id else f":{project.artifact_id}"
+    )
+
+
 def _topological_projects(projects: Sequence[MavenProject]) -> List[MavenProject]:
     by_artifact: Dict[str, MavenProject] = {}
     for project in projects:
@@ -496,11 +529,15 @@ def _topological_projects(projects: Sequence[MavenProject]) -> List[MavenProject
             )
         by_artifact[project.artifact_id] = project
 
+    by_coordinate: Dict[str, MavenProject] = {
+        _project_coordinate(project): project for project in projects
+    }
     graph: Dict[str, Set[str]] = {project.artifact_id: set() for project in projects}
     for project in projects:
-        for dependency in project.dependencies:
-            if dependency in by_artifact and dependency != project.artifact_id:
-                graph[project.artifact_id].add(dependency)
+        for coordinate in project.dependency_coordinates:
+            target = by_coordinate.get(coordinate)
+            if target is not None and target.artifact_id != project.artifact_id:
+                graph[project.artifact_id].add(target.artifact_id)
 
     ordered: List[MavenProject] = []
     visiting: Set[str] = set()
@@ -523,8 +560,10 @@ def _topological_projects(projects: Sequence[MavenProject]) -> List[MavenProject
     return ordered
 
 
-def _build_units(projects: Sequence[MavenProject]) -> List[Path]:
-    """Return Maven reactor roots rather than invoking every nested module.
+def _build_unit_graph(
+    projects: Sequence[MavenProject],
+) -> Tuple[List[Path], Dict[Path, Set[Path]], Dict[Path, Path]]:
+    """Return Maven reactor roots, their dependency graph, and project owners.
 
     Some APS Maven plugins resolve repository-relative files such as
     ``./scripts/validation.xml`` from the process working directory.  Building
@@ -561,17 +600,17 @@ def _build_units(projects: Sequence[MavenProject]) -> List[Path]:
         path_to_root[resolved] = result
         return result
 
-    artifact_to_root: Dict[str, Set[Path]] = {}
+    coordinate_to_root: Dict[str, Set[Path]] = {}
     for project in projects:
-        artifact_to_root.setdefault(project.artifact_id, set()).add(owner_root(project.path))
+        coordinate_to_root.setdefault(_project_coordinate(project), set()).add(
+            owner_root(project.path)
+        )
 
     graph: Dict[Path, Set[Path]] = {root: set() for root in roots}
     for project in projects:
         source_root = owner_root(project.path)
-        for dependency_artifact in project.dependencies:
-            if dependency_artifact == project.artifact_id:
-                continue
-            for target_root in artifact_to_root.get(dependency_artifact, set()):
+        for dependency_coordinate in project.dependency_coordinates:
+            for target_root in coordinate_to_root.get(dependency_coordinate, set()):
                 if target_root != source_root:
                     graph[source_root].add(target_root)
 
@@ -594,7 +633,15 @@ def _build_units(projects: Sequence[MavenProject]) -> List[Path]:
 
     for root_path in sorted(roots, key=lambda item: str(item)):
         visit(root_path)
-    return ordered
+    return ordered, graph, {
+        project.path.resolve(): owner_root(project.path).resolve()
+        for project in projects
+    }
+
+
+def _build_units(projects: Sequence[MavenProject]) -> List[Path]:
+    """Return Maven reactor roots in dependency order."""
+    return _build_unit_graph(projects)[0]
 
 
 def _owner_build_unit(project: Path, build_units: Sequence[Path]) -> Path:
@@ -694,13 +741,16 @@ def build_workspace(
     jdk_profile: Optional[str] = None,
     project_jdk: Optional[Mapping[str, str]] = None,
     progress: Optional[ProgressCallback] = None,
+    jobs: int = 1,
 ) -> Tuple[List[MavenProject], MavenBuildReport]:
     root = Path(workspace).resolve()
     normalized_goals = tuple(goals or ())
     if not normalized_goals:
         raise MavenError("at least one Maven goal is required")
+    if jobs < 1:
+        raise MavenError("jobs must be >= 1")
     projects = _topological_projects(discover_maven_projects(root))
-    build_units = _build_units(projects)
+    build_units, unit_graph, _ = _build_unit_graph(projects)
     jdk_selections = resolve_jdk_selections(
         root, projects, build_units, config=jdk_config,
         global_profile=jdk_profile, project_profiles=project_jdk,
@@ -715,12 +765,24 @@ def build_workspace(
         logs=[],
         jdk_profiles=[],
     )
-    for index, project in enumerate(build_units, 1):
+
+    reverse_graph: Dict[Path, Set[Path]] = {unit: set() for unit in build_units}
+    for unit, dependencies in unit_graph.items():
+        for dependency in dependencies:
+            reverse_graph.setdefault(dependency, set()).add(unit)
+    pending: Dict[Path, Set[Path]] = {
+        unit: set(dependencies) for unit, dependencies in unit_graph.items()
+    }
+    completed_units: Set[Path] = set()
+    completed_count = 0
+    unit_order = {unit.resolve(): index for index, unit in enumerate(build_units)}
+    completed_records: List[Tuple[int, List[str], str, Path]] = []
+
+    def run_unit(project: Path) -> Tuple[Path, subprocess.CompletedProcess, List[str], str, Path]:
         selection = jdk_selections[project.resolve()]
         if progress:
             progress(
-                f"build [{index}/{len(build_units)}] {_relative(root, project)} "
-                f"using JDK {selection.summary()}"
+                f"build start {_relative(root, project)} using JDK {selection.summary()}"
             )
         command = [maven, "-B"]
         if skip_tests:
@@ -730,12 +792,7 @@ def build_workspace(
         result = _run_maven(
             runner, project, command, log, selection=selection, workspace=root
         )
-        report.build_order.append(str(project))
-        report.commands.append(list(command))
-        report.logs.append(str(log))
-        report.jdk_profiles.append(selection.summary())
         if result.returncode != 0:
-            report.failed.append(str(project))
             raise MavenError(
                 _failure_message(
                     f"Maven build failed for {project} (exit {result.returncode}); log: {log}",
@@ -743,7 +800,67 @@ def build_workspace(
                     result,
                 )
             )
-        report.succeeded.append(str(project))
+        return project, result, list(command), selection.summary(), log
+
+    with concurrent.futures.ThreadPoolExecutor(
+        max_workers=jobs, thread_name_prefix="apsgraph-build"
+    ) as executor:
+        futures: Dict[concurrent.futures.Future, Path] = {}
+        active_units: Set[Path] = set()
+
+        def schedule_ready() -> None:
+            for unit in build_units:
+                resolved = unit.resolve()
+                if (
+                    resolved in pending
+                    and not pending[resolved]
+                    and resolved not in completed_units
+                    and resolved not in active_units
+                ):
+                    future = executor.submit(run_unit, unit)
+                    futures[future] = resolved
+                    active_units.add(resolved)
+
+        schedule_ready()
+        while futures:
+            done, _ = concurrent.futures.wait(
+                futures, return_when=concurrent.futures.FIRST_EXCEPTION
+            )
+            failures: List[BaseException] = []
+            failed_unit: Optional[Path] = None
+            for future in done:
+                unit = futures.pop(future)
+                active_units.discard(unit)
+                try:
+                    project, result, command, jdk_profile, log = future.result()
+                except BaseException as exc:
+                    failures.append(exc)
+                    failed_unit = failed_unit or unit
+                    continue
+                completed_count += 1
+                if progress:
+                    progress(
+                        f"build complete [{completed_count}/{len(build_units)}] "
+                        f"{_relative(root, project)} using JDK {jdk_profile}"
+                    )
+                completed_records.append((unit_order[unit], list(command), jdk_profile, log))
+                completed_units.add(unit)
+                for dependent in reverse_graph.get(unit, set()):
+                    pending[dependent].discard(unit)
+            if failures:
+                for future in futures:
+                    future.cancel()
+                if failed_unit:
+                    report.failed.append(str(failed_unit))
+                raise failures[0]
+            schedule_ready()
+
+    for _, command, jdk_profile, log in sorted(completed_records, key=lambda item: item[0]):
+        report.commands.append(command)
+        report.logs.append(str(log))
+        report.jdk_profiles.append(jdk_profile)
+    report.build_order = [str(unit) for unit in build_units]
+    report.succeeded = list(report.build_order)
     return projects, report
 
 
@@ -853,6 +970,40 @@ def _selected_projects(
             selected.append(project)
     return selected, excluded
 
+
+def _dependency_analysis_projects(
+    projects: Sequence[MavenProject],
+) -> Tuple[List[MavenProject], List[str]]:
+    """Keep runtime modules and skip workspace structural parent/aggregator POMs.
+
+    ``dependency:list`` on an aggregator duplicates the transitive closure of
+    every child and can run for several minutes without adding a coordinate.
+    Child modules already resolve their own dependencies, so packaging POMs,
+    reactors with modules, and POMs referenced as a workspace parent are not
+    analyzed.
+    """
+    referenced_parents = {
+        project.parent_artifact_id for project in projects if project.parent_artifact_id
+    }
+    selected: List[MavenProject] = []
+    excluded: List[str] = []
+    for project in projects:
+        reason = ""
+        if project.packaging == "pom":
+            reason = "packaging=pom"
+        elif project.modules:
+            reason = "Maven aggregator with modules"
+        elif project.artifact_id in referenced_parents:
+            reason = "workspace parent project"
+        if reason:
+            excluded.append(
+                f"{project.artifact_id} ({project.path}); reason: {reason}"
+            )
+        else:
+            selected.append(project)
+    return selected, excluded
+
+
 def collect_dependencies(
     workspace: Path | str,
     projects: Sequence[MavenProject],
@@ -863,24 +1014,30 @@ def collect_dependencies(
     runner: CommandRunner = default_runner,
     jdk_selections: Optional[Mapping[Path, MavenJdkSelection]] = None,
     progress: Optional[ProgressCallback] = None,
+    jobs: int = 1,
 ) -> DependencyInventory:
     root = Path(workspace).resolve()
     cache = _resolve_cache(root, cache_dir)
     deps_dir = cache / "deps"
     logs_dir = cache / "logs" / "maven-dependencies"
+    if jobs < 1:
+        raise MavenError("jobs must be >= 1")
     if deps_dir.exists():
         shutil.rmtree(deps_dir)
     deps_dir.mkdir(parents=True, exist_ok=True)
     logs_dir.mkdir(parents=True, exist_ok=True)
 
-    analysis_projects, excluded_project_records = _selected_projects(
+    explicit_projects, excluded_project_records = _selected_projects(
         root, projects, excluded_projects
     )
+    analysis_projects, structural_excluded = _dependency_analysis_projects(
+        explicit_projects
+    )
+    excluded_project_records.extend(structural_excluded)
     allowed_scopes = _selected_scopes(scope)
-    project_artifacts = {project.artifact_id for project in projects}
+    project_coordinates = {_project_coordinate(project) for project in projects}
     all_dependencies: List[MavenDependency] = []
     excluded_reactor: Set[str] = set()
-    project_dependencies: Dict[str, List[MavenDependency]] = {}
 
     def jdk_for(project: MavenProject) -> Optional[MavenJdkSelection]:
         if not jdk_selections:
@@ -893,13 +1050,14 @@ def collect_dependencies(
         candidates.sort(key=lambda item: len(item[0].parts), reverse=True)
         return candidates[0][1] if candidates else None
 
-    for index, project in enumerate(analysis_projects, 1):
+    def resolve_project(
+        project: MavenProject,
+    ) -> Tuple[MavenProject, List[MavenDependency], List[str]]:
         selection = jdk_for(project)
+        jdk_label = f" using JDK {selection.summary()}" if selection else ""
         if progress:
             progress(
-                f"dependencies [{index}/{len(analysis_projects)}] "
-                f"{_relative(root, project.path)}"
-                + (f" using JDK {selection.summary()}" if selection else "")
+                f"dependencies start {_relative(root, project.path)}{jdk_label}"
             )
         slug = _project_slug(root, project.path)
         list_log = logs_dir / f"{slug}.list.log"
@@ -928,17 +1086,17 @@ def collect_dependencies(
             raise MavenError(f"Maven dependency:list did not create output: {list_output}")
 
         selected: List[MavenDependency] = []
+        reactor_excluded: List[str] = []
         for parsed in _parse_dependency_list(list_output):
             dependency = replace(parsed, project=str(project.path))
             identity = f"{dependency.group_id}:{dependency.artifact_id}:{dependency.version}"
-            if dependency.artifact_id in project_artifacts:
-                excluded_reactor.add(identity)
+            dependency_coordinate = f"{dependency.group_id}:{dependency.artifact_id}"
+            if dependency_coordinate in project_coordinates:
+                reactor_excluded.append(identity)
                 continue
             if dependency.scope not in allowed_scopes or dependency.dependency_type != "jar":
                 continue
-            all_dependencies.append(dependency)
             selected.append(dependency)
-        project_dependencies[str(project.path)] = selected
 
         output_dir = deps_dir / slug
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -962,28 +1120,58 @@ def collect_dependencies(
                     result,
                 )
             )
+        return project, selected, reactor_excluded
+
+    completed_count = 0
+    with concurrent.futures.ThreadPoolExecutor(
+        max_workers=min(jobs, len(analysis_projects) or 1),
+        thread_name_prefix="apsgraph-dependencies",
+    ) as executor:
+        future_to_project = {
+            executor.submit(resolve_project, project): project
+            for project in analysis_projects
+        }
+        failures: List[BaseException] = []
+        for future in concurrent.futures.as_completed(future_to_project):
+            try:
+                project, selected, reactor = future.result()
+            except BaseException as exc:
+                failures.append(exc)
+                continue
+            completed_count += 1
+            all_dependencies.extend(selected)
+            excluded_reactor.update(reactor)
+            if progress:
+                progress(
+                    f"dependencies complete [{completed_count}/{len(analysis_projects)}] "
+                    f"{_relative(root, project.path)}"
+                )
+        if failures:
+            raise failures[0]
 
     if progress:
         progress("stage 4/7 check dependency versions")
-    # The user chose fail-closed conflict handling.  Do not try to select the
-    # nearest/newest version and do not import a partial graph.
-    artifact_versions: Dict[str, Set[str]] = {}
-    artifact_sources: Dict[str, Set[str]] = {}
+    # Conflict detection uses the Maven coordinate groupId:artifactId. Two
+    # different groups may legitimately reuse an artifactId (for example both
+    # org.jetbrains:annotations and com.google.android:annotations).
+    artifact_versions: Dict[Tuple[str, str], Set[str]] = {}
+    artifact_sources: Dict[Tuple[str, str], Set[str]] = {}
     for dependency in all_dependencies:
-        artifact_versions.setdefault(dependency.artifact_id, set()).add(dependency.version)
-        artifact_sources.setdefault(dependency.artifact_id, set()).add(
+        coordinate = (dependency.group_id, dependency.artifact_id)
+        artifact_versions.setdefault(coordinate, set()).add(dependency.version)
+        artifact_sources.setdefault(coordinate, set()).add(
             f"{dependency.group_id}:{dependency.version}:{dependency.project}"
         )
     conflicts = {
-        artifact_id: sorted(versions)
-        for artifact_id, versions in artifact_versions.items()
+        coordinate: sorted(versions)
+        for coordinate, versions in artifact_versions.items()
         if len(versions) > 1
     }
     if conflicts:
         details = "; ".join(
-            f"{artifact_id} -> {', '.join(versions)} "
-            f"(sources: {', '.join(sorted(artifact_sources[artifact_id]))})"
-            for artifact_id, versions in sorted(conflicts.items())
+            f"{group}:{artifact} -> {', '.join(versions)} "
+            f"(sources: {', '.join(sorted(artifact_sources[(group, artifact)]))})"
+            for (group, artifact), versions in sorted(conflicts.items())
         )
         raise MavenError(f"conflicting Maven dependency versions are not allowed: {details}")
 
@@ -1128,6 +1316,7 @@ def scan_workspace_with_dependencies(
     jdk_profile: Optional[str] = None,
     project_jdk: Optional[Mapping[str, str]] = None,
     progress: Optional[ProgressCallback] = None,
+    jobs: int = 1,
 ) -> FullScanResult:
     root = Path(workspace).resolve()
     target = Path(db_path).resolve()
@@ -1140,6 +1329,7 @@ def scan_workspace_with_dependencies(
         root, goals=goals, skip_tests=skip_tests, maven=maven,
         cache_dir=cache_dir, runner=runner, jdk_config=jdk_config,
         jdk_profile=jdk_profile, project_jdk=project_jdk, progress=progress,
+        jobs=jobs,
     )
     build_units = _build_units(projects)
     jdk_selections = resolve_jdk_selections(
@@ -1152,7 +1342,7 @@ def scan_workspace_with_dependencies(
     inventory = collect_dependencies(
         root, projects, scope=dependency_scope, maven=maven,
         cache_dir=cache_dir, excluded_projects=excluded_projects, runner=runner,
-        jdk_selections=jdk_selections, progress=progress,
+        jdk_selections=jdk_selections, progress=progress, jobs=jobs,
     )
 
     fd, staging_name = tempfile.mkstemp(
@@ -1205,6 +1395,7 @@ def import_maven_dependencies(
     jdk_profile: Optional[str] = None,
     project_jdk: Optional[Mapping[str, str]] = None,
     progress: Optional[ProgressCallback] = None,
+    jobs: int = 1,
 ) -> Dict[str, object]:
     root = Path(workspace).resolve()
     target = Path(db_path).resolve()
@@ -1221,6 +1412,7 @@ def import_maven_dependencies(
             root, goals=goals, skip_tests=skip_tests, maven=maven,
             cache_dir=cache_dir, runner=runner, jdk_config=jdk_config,
             jdk_profile=jdk_profile, project_jdk=project_jdk, progress=progress,
+            jobs=jobs,
         )
     else:
         projects = _topological_projects(discover_maven_projects(root))
@@ -1243,7 +1435,7 @@ def import_maven_dependencies(
     inventory = collect_dependencies(
         root, projects, scope=dependency_scope, maven=maven,
         cache_dir=cache_dir, excluded_projects=excluded_projects, runner=runner,
-        jdk_selections=jdk_selections, progress=progress,
+        jdk_selections=jdk_selections, progress=progress, jobs=jobs,
     )
 
     fd, staging_name = tempfile.mkstemp(

@@ -3,6 +3,8 @@ import hashlib
 import io
 import json
 import subprocess
+import threading
+import time
 import tempfile
 import unittest
 import zipfile
@@ -46,7 +48,8 @@ OLD_JAR_MODEL = """<?xml version="1.0"?>
 """
 
 
-def write_pom(path: Path, artifact_id: str, dependencies=(), modules=()):
+def write_pom(path: Path, artifact_id: str, dependencies=(), modules=(), packaging="jar", parent=None,
+              group="demo", parent_group="demo", omit_group=False):
     dependency_xml = "".join(
         f"<dependency><groupId>{group}</groupId>"
         f"<artifactId>{artifact}</artifactId><version>{version}</version>"
@@ -54,11 +57,17 @@ def write_pom(path: Path, artifact_id: str, dependencies=(), modules=()):
         for group, artifact, version, scope in dependencies
     )
     module_xml = ''.join(f'<module>{module}</module>' for module in modules)
+    packaging_xml = f'<packaging>{packaging}</packaging>'
+    parent_xml = ''
+    if parent:
+        parent_xml = (f'<parent><groupId>{parent_group}</groupId>'
+                      f'<artifactId>{parent}</artifactId><version>1.0.0</version></parent>')
+    group_xml = '' if omit_group else f'<groupId>{group}</groupId>'
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         f'<project xmlns="http://maven.apache.org/POM/4.0.0">'
         f'<modelVersion>4.0.0</modelVersion>'
-        f'<groupId>demo</groupId><artifactId>{artifact_id}</artifactId>'
+        f'{parent_xml}{group_xml}<artifactId>{artifact_id}</artifactId>{packaging_xml}'
         f'<version>1.0.0</version><modules>{module_xml}</modules><dependencies>{dependency_xml}</dependencies>'
         f'</project>',
         encoding="utf-8",
@@ -81,6 +90,7 @@ class FakeMaven:
         self.builds = []
         self.commands = []
         self.environments = []
+        self.state_lock = threading.Lock()
 
     def __call__(self, project: Path, command, log: Path, env=None, metadata=None):
         log.parent.mkdir(parents=True, exist_ok=True)
@@ -88,8 +98,9 @@ class FakeMaven:
         if metadata:
             lines.extend(f"# {key}: {value}" for key, value in metadata.items())
         log.write_text("\n".join(lines) + "\n", encoding="utf-8")
-        self.commands.append(list(command))
-        self.environments.append(dict(env) if env else None)
+        with self.state_lock:
+            self.commands.append(list(command))
+            self.environments.append(dict(env) if env else None)
         if "dependency:list" in command:
             artifact = project.name
             output = Path(next(value.split("=", 1)[1] for value in command if value.startswith("-DoutputFile=")))
@@ -112,7 +123,8 @@ class FakeMaven:
                 else:
                     write_model_jar(path, model)
             return subprocess.CompletedProcess(command, 0, "", "")
-        self.builds.append(project.name)
+        with self.state_lock:
+            self.builds.append(project.name)
         if self.fail_build == project.name:
             return subprocess.CompletedProcess(command, 1, "", "simulated failure")
         return subprocess.CompletedProcess(command, 0, "", "")
@@ -405,6 +417,140 @@ class MavenWorkspaceTest(unittest.TestCase):
         with self.assertRaisesRegex(MavenError, "shared.*1.0.0.*2.0.0"):
             scan_workspace_with_dependencies(self.root, self.db, runner=runner)
         self.assertEqual(before, self.digest(self.db))
+
+    def test_dependency_conflict_uses_group_and_artifact_coordinate(self):
+        runner = self.runner()
+        runner.dependencies["app"] = [
+            "org.jetbrains:annotations:jar:23.0.0:compile",
+            "com.google.android:annotations:jar:4.1.1.4:runtime",
+        ]
+        runner.jars["org.jetbrains:annotations:23.0.0"] = JAR_MODEL
+        runner.jars["com.google.android:annotations:4.1.1.4"] = JAR_MODEL
+
+        inventory = collect_dependencies(self.root, discover_maven_projects(self.root), runner=runner)
+        # Different groupId/artifactId coordinates are independent even when
+        # their jar content happens to be identical in this fixture.
+        self.assertEqual(1, len(inventory.jars))
+
+        runner.dependencies["app"][1] = "org.jetbrains:annotations:jar:22.0.0:runtime"
+        runner.jars["org.jetbrains:annotations:22.0.0"] = JAR_MODEL
+        with self.assertRaisesRegex(MavenError, "org.jetbrains:annotations -> 22.0.0, 23.0.0"):
+            collect_dependencies(self.root, discover_maven_projects(self.root), runner=runner)
+
+    def test_same_jar_version_from_multiple_projects_is_deduplicated(self):
+        # Both framework and app resolve the exact same Maven coordinate.  This
+        # is normal reuse and must not be treated as a version conflict.
+        inventory = collect_dependencies(self.root, discover_maven_projects(self.root), runner=self.runner())
+        self.assertEqual(2, len(inventory.dependencies))
+        self.assertEqual(1, len(inventory.jars))
+        self.assertEqual("shared-1.0.0.jar", inventory.jars[0].name)
+
+    def test_reactor_matching_uses_group_and_artifact_coordinate(self):
+        isolated = self.root / "coordinates"
+        write_pom(isolated / "library/pom.xml", "library", modules=("framework",))
+        write_pom(isolated / "library/framework/pom.xml", "lib-framework")
+        write_pom(isolated / "application/pom.xml", "application", modules=("app",))
+        write_pom(
+            isolated / "application/app/pom.xml",
+            "business-app",
+            [("demo", "lib-framework", "1.0.0", "compile")],
+        )
+        runner = FakeMaven(
+            dependencies={
+                "library": [], "framework": [], "application": [],
+                "app": [
+                    "demo:lib-framework:jar:1.0.0:compile",
+                    "other:lib-framework:jar:1.0.0:compile",
+                ],
+            },
+            jars={"other:lib-framework:1.0.0": JAR_MODEL},
+        )
+        projects, report = build_workspace(isolated, runner=runner)
+        self.assertEqual(
+            [isolated.resolve() / "library", isolated.resolve() / "application"],
+            [Path(value).resolve() for value in report.build_order],
+        )
+        inventory = collect_dependencies(isolated, projects, runner=runner)
+        self.assertEqual(["demo:lib-framework:1.0.0"], inventory.reactor_dependencies_excluded)
+        self.assertEqual(
+            [("other", "lib-framework")],
+            [(dependency.group_id, dependency.artifact_id) for dependency in inventory.dependencies],
+        )
+
+    def test_project_group_id_may_be_inherited_from_parent(self):
+        isolated = self.root / "inherited-group"
+        write_pom(isolated / "parent/pom.xml", "standalone-parent")
+        write_pom(
+            isolated / "child/pom.xml", "inherited-child",
+            parent="standalone-parent", omit_group=True,
+        )
+        write_pom(
+            isolated / "consumer/pom.xml", "consumer",
+            [("demo", "inherited-child", "1.0.0", "compile")],
+        )
+        projects, report = build_workspace(isolated, runner=FakeMaven(
+            dependencies={"standalone-parent": [], "inherited-child": [], "consumer": []}, jars={}
+        ))
+        self.assertEqual(
+            ["child", "consumer", "parent"],
+            [Path(value).name for value in report.build_order],
+        )
+
+    def test_workspace_aggregators_and_parents_are_not_dependency_analyzed(self):
+        isolated = self.root / "structural"
+        write_pom(isolated / "pom.xml", "aggregate", modules=("child",), packaging="pom")
+        write_pom(isolated / "child/pom.xml", "child")
+        write_pom(isolated / "standalone-parent/pom.xml", "standalone-parent")
+        write_pom(isolated / "standalone-child/pom.xml", "standalone-child", parent="standalone-parent")
+        projects = discover_maven_projects(isolated)
+        runner = FakeMaven(
+            dependencies={"aggregate": [], "child": [], "standalone-parent": [], "standalone-child": []},
+            jars={},
+        )
+        inventory = collect_dependencies(isolated, projects, runner=runner)
+
+        self.assertEqual(2, inventory.projects_analyzed)
+        self.assertEqual(
+            {"aggregate", "standalone-parent"},
+            {record.split(" ", 1)[0] for record in inventory.projects_excluded},
+        )
+        self.assertEqual(4, sum(any("dependency:" in value for value in command) for command in runner.commands))
+
+    def test_independent_build_units_and_dependencies_run_in_parallel(self):
+        isolated = self.root / "parallel"
+        write_pom(isolated / "alpha/pom.xml", "alpha")
+        write_pom(isolated / "beta/pom.xml", "beta")
+
+        class ConcurrentFakeMaven(FakeMaven):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.lock = threading.Lock()
+                self.active = 0
+                self.maximum = 0
+
+            def __call__(self, project, command, log, env=None, metadata=None):
+                with self.lock:
+                    self.active += 1
+                    self.maximum = max(self.maximum, self.active)
+                try:
+                    time.sleep(0.05)
+                    return super().__call__(project, command, log, env=env, metadata=metadata)
+                finally:
+                    with self.lock:
+                        self.active -= 1
+
+        dependencies = {"alpha": [], "beta": []}
+        build_runner = ConcurrentFakeMaven(dependencies, {}, fail_build=None)
+        _, report = build_workspace(isolated, runner=build_runner, jobs=2)
+        self.assertEqual(2, len(report.succeeded))
+        self.assertEqual(2, build_runner.maximum)
+
+        dependency_runner = ConcurrentFakeMaven(dependencies, {})
+        inventory = collect_dependencies(
+            isolated, discover_maven_projects(isolated), runner=dependency_runner, jobs=2
+        )
+        self.assertEqual(2, inventory.projects_analyzed)
+        self.assertEqual(2, dependency_runner.maximum)
 
     def test_import_maven_deps_replaces_old_jar_models_atomically(self):
         scan_workspace(self.root, self.db)

@@ -40,6 +40,13 @@ def _resolve_one(conn, query: str) -> Dict[str, Any]:
     return nodes[0]
 
 
+def _positive_int(value: str) -> int:
+    number = int(value)
+    if number < 1:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return number
+
+
 def _positive_depth(value: str) -> int:
     depth = int(value)
     if depth < 1:
@@ -156,6 +163,8 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument("--maven", default="mvn", help="Maven executable (default: mvn)")
     scan.add_argument("--cache-dir", type=Path, default=Path(".apsgraph"),
                       help="workspace-relative cache directory (default: .apsgraph)")
+    scan.add_argument("--jobs", type=_positive_int, default=4, metavar="N",
+                      help="parallel Maven jobs inside build/dependency phases (default: 4)")
     scan.add_argument("--exclude-project", action="append", default=[], metavar="PATTERN",
                       help="skip dependency analysis for a project glob; repeatable "
                            "(matched against artifactId/project path)")
@@ -197,6 +206,8 @@ def build_parser() -> argparse.ArgumentParser:
     importdeps.add_argument("--maven", default="mvn", help="Maven executable (default: mvn)")
     importdeps.add_argument("--cache-dir", type=Path, default=Path(".apsgraph"),
                             help="workspace-relative cache directory (default: .apsgraph)")
+    importdeps.add_argument("--jobs", type=_positive_int, default=4, metavar="N",
+                            help="parallel Maven jobs inside build/dependency phases (default: 4)")
     importdeps.add_argument("--exclude-project", action="append", default=[], metavar="PATTERN",
                             help="skip dependency analysis for a project glob; repeatable "
                                  "(matched against artifactId/project path)")
@@ -349,6 +360,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                     jdk_profile=jdk_profile,
                     project_jdk=project_jdk,
                     progress=_progress,
+                    jobs=args.jobs,
                 )
                 _json(asdict(result))
             else:
@@ -401,6 +413,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 jdk_profile=jdk_profile,
                 project_jdk=project_jdk,
                 progress=_progress,
+                jobs=args.jobs,
             )
             _json(result)
             return 0

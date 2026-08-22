@@ -1,7 +1,7 @@
 # APSGraph 使用说明
 
-> 版本：0.4.0
-> 更新时间：2026-08-22
+> 版本：0.5.0
+> 更新时间：2026-08-23
 > 项目地址：https://github.com/NeverMoreLyh/aps-model-tools
 
 ---
@@ -93,6 +93,7 @@ apsgraph scan
 | `--deps-scope` | 依赖范围：`compile` / `runtime` / `test`，默认 `runtime` |
 | `--maven` | Maven 可执行文件，默认 `mvn` |
 | `--cache-dir` | workspace 相对缓存目录，默认 `.apsgraph` |
+| `--jobs` | build / dependencies 阶段内部的并行 Maven 任务数，默认 `4` |
 | `--exclude-project` | 跳过依赖分析的 project glob，可重复；匹配 artifactId 或项目相对路径 |
 | `.apsgraph.json` | workspace 级项目规则文件，可配置 `excludeProjects` 或 `maven.excludeProjects` |
 | `--no-default-project-excludes` | 关闭默认 `*dist` 排除规则 |
@@ -100,7 +101,7 @@ apsgraph scan
 | `--project-jdk` | 项目/reactor glob 的 JDK profile 覆盖，格式 `PROJECT=PROFILE`，可重复 |
 | `--java-home` | profile 的显式 `JAVA_HOME`，格式 `PROFILE=PATH`，可重复 |
 
-普通 `scan` 不要求 Maven。`scan --include-deps` 的流程为：发现全部 `pom.xml`（排除 `target` 等目录）→ 识别 Maven aggregator/reactor 根项目并按 workspace 内依赖关系拓扑排序 → 逐个 reactor 根目录执行默认 `mvn -B -DskipTests install` → 执行 `dependency:list` 与 `dependency:copy-dependencies` → 扫描 workspace XML 并导入依赖 JAR XML → 原子替换最终索引。任一 Maven 项目失败、同一 artifact ID 解析出多个版本、或依赖 XML 解析失败时立即退出，不替换已有索引。
+普通 `scan` 不要求 Maven。`scan --include-deps` 的流程为：发现全部 `pom.xml`（排除 `target` 等目录）→ 识别 Maven aggregator/reactor 根项目并按 workspace 内依赖关系拓扑排序 → 按依赖约束执行默认 `mvn -B -DskipTests install`（有依赖关系的 reactor 保持先后顺序，独立 reactor 可由 `--jobs` 并行）→ 全部构建成功后并行执行各运行模块的 `dependency:list` 与 `dependency:copy-dependencies` → 扫描 workspace XML 并导入依赖 JAR XML → 原子替换最终索引。任一 Maven 项目失败、同一 `groupId:artifactId` 解析出多个版本、或依赖 XML 解析失败时立即退出，不替换已有索引。
 
 进度日志输出到 stderr，最终 JSON 仍输出到 stdout，便于管道处理。关键阶段包括项目发现、workspace 构建、每个 reactor 构建、依赖解析、版本冲突检查、workspace XML 扫描、JAR 模型导入和原子发布。
 
@@ -133,7 +134,7 @@ apsgraph status
 apsgraph scan --include-deps
 ```
 
-默认参数等价于 `--maven-goal install --skip-tests --deps-scope runtime --db .apsgraph/apsgraph.db`，所有参数均可显式覆盖。构建日志位于 `.apsgraph/logs/maven/`，依赖解析日志位于 `.apsgraph/logs/maven-dependencies/`，依赖清单位于 `.apsgraph/dependency-manifest.json`。可在 workspace 根目录维护 `.apsgraph.json`：
+默认参数等价于 `--maven-goal install --skip-tests --deps-scope runtime --db .apsgraph/apsgraph.db --jobs 4`，所有参数均可显式覆盖。构建日志位于 `.apsgraph/logs/maven/`，依赖解析日志位于 `.apsgraph/logs/maven-dependencies/`，依赖清单位于 `.apsgraph/dependency-manifest.json`。可在 workspace 根目录维护 `.apsgraph.json`：
 
 ```json
 {
@@ -151,7 +152,7 @@ apsgraph scan --include-deps
 }
 ```
 
-项目级规则始终生效；默认跳过 artifactId 或项目路径匹配 `*dist` 的项目依赖分析；例如 `delivery-dist`、`packaging/*dist`。该规则只影响依赖解析与 JAR 导入，不影响 Maven reactor 构建。可用 `--exclude-project` 增加规则，例如 `--exclude-project 'packaging/*'`；添加 `--no-default-project-excludes` 可关闭默认规则。清单会记录 `projects_analyzed` 与 `projects_excluded`。
+除了显式排除规则外，`packaging=pom`、带 `<modules>` 的 aggregator、以及被 workspace 内项目引用为 parent 的 POM 均为结构性项目，不再执行依赖解析，避免重复展开所有子模块的传递依赖。项目级规则始终生效；默认跳过 artifactId 或项目路径匹配 `*dist` 的项目依赖分析；例如 `delivery-dist`、`packaging/*dist`。该规则只影响依赖解析与 JAR 导入，不影响 Maven reactor 构建。可用 `--exclude-project` 增加规则，例如 `--exclude-project 'packaging/*'`；添加 `--no-default-project-excludes` 可关闭默认规则。清单会记录 `projects_analyzed` 与 `projects_excluded`。
 
 #### 混合 JDK workspace
 
@@ -192,7 +193,7 @@ apsgraph import-maven-deps --deps-scope compile --maven-goal package --no-skip-t
 
 1. `scan` / `sync` 只读取工作空间 XML，不需要先执行 Maven 构建；
 2. `scan --include-deps` 会执行构建并可能访问 Maven 仓库/网络；
-3. 多个项目依赖同一 artifact ID 的不同版本时直接失败，不做 newest/nearest 选择；
+3. 多个项目可以依赖同一坐标的同一版本；同一 `groupId:artifactId` 解析出多个版本时直接失败，不做 newest/nearest 选择，不同 groupId 复用同一 artifact ID 不算冲突；
 4. JAR 条目使用 `jar:JAR路径!/条目路径` 作为逻辑路径；
 5. `sync` 不会把 JAR 导入内容误判为新增/删除文件；
 6. 不带 `--include-deps` 的 `scan` 是全量重建，会清空之前的 JAR 导入结果。

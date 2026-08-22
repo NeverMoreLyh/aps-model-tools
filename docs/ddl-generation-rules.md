@@ -1,9 +1,9 @@
 # APS 元数据模型 → 数据库建表脚本：生成规则梳理
 
-> 依据 `aps-maven-6.51.16-RELEASE/aps-model-util` 源码与 FreeMarker 模板逆向整理，
-> 作为统一 DDL 生成工具（`aps-model ddl-gen`）的实现基准。
+> 依据 `aps-maven-6.51.16-RELEASE/apsgraph-util` 源码与 FreeMarker 模板逆向整理，
+> 作为统一 DDL 生成工具（`apsgraph ddl-gen`）的实现基准。
 >
-> 模板路径：`aps-model-util/src/main/resources/cn/sunline/ltts/frw/model/generator/sql/`
+> 模板路径：`apsgraph-util/src/main/resources/cn/sunline/ltts/frw/model/generator/sql/`
 > Java 入口：`cn.sunline.ltts.frw.model.generator.sql.DdlGenerator` / `TableDdlUtil`
 
 ## 1. 生成管线总览
@@ -154,7 +154,7 @@ comment on column 表名.列 is '长名(枚举...)';
 | Oracle | `CREATE SEQUENCE id START WITH x INCREMENT BY y MINVALUE x [MAXVALUE z] CACHE n CYCLE/NOCYCLE ORDER` |
 | PostgreSQL | `CREATE SEQUENCE id START x INCREMENT y MINVALUE x [MAXVALUE z] CACHE n CYCLE/NO CYCLE` |
 
-## 6. 与 aps-model-tools SQLite 索引的对应关系
+## 6. 与 apsgraph SQLite 索引的对应关系
 
 | 模板概念 | SQLite 索引对应 |
 |---|---|

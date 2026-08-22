@@ -40,20 +40,34 @@ from .store import connect, find_nodes
 
 
 # ─── 样式常量 ───
+# openpyxl 是可选依赖。不要在导入模块时创建样式对象，否则其他 CLI 命令
+# 也会因为 openpyxl 缺失而无法启动。
 
-_TITLE_FILL = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
-_HEADER_FILL = PatternFill(start_color="D6E4F0", end_color="D6E4F0", fill_type="solid")
-_INFO_FILL = PatternFill(start_color="E2EFDA", end_color="E2EFDA", fill_type="solid")
-_THIN_BORDER = Border(
-    left=Side(style="thin"), right=Side(style="thin"),
-    top=Side(style="thin"), bottom=Side(style="thin"),
-)
-_TITLE_FONT = Font(name="Arial", size=12, bold=True, color="FFFFFF")
-_HEADER_FONT = Font(name="Arial", size=10, bold=True)
-_INFO_FONT = Font(name="Arial", size=10, bold=True)
-_DATA_FONT = Font(name="Arial", size=10)
-_WRAP_ALIGN = Alignment(wrap_text=True, vertical="top")
-_CENTER_ALIGN = Alignment(horizontal="center", vertical="center", wrap_text=True)
+if HAS_OPENPYXL:
+    _TITLE_FILL = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+    _HEADER_FILL = PatternFill(start_color="D6E4F0", end_color="D6E4F0", fill_type="solid")
+    _INFO_FILL = PatternFill(start_color="E2EFDA", end_color="E2EFDA", fill_type="solid")
+    _THIN_BORDER = Border(
+        left=Side(style="thin"), right=Side(style="thin"),
+        top=Side(style="thin"), bottom=Side(style="thin"),
+    )
+    _TITLE_FONT = Font(name="Arial", size=12, bold=True, color="FFFFFF")
+    _HEADER_FONT = Font(name="Arial", size=10, bold=True)
+    _INFO_FONT = Font(name="Arial", size=10, bold=True)
+    _DATA_FONT = Font(name="Arial", size=10)
+    _WRAP_ALIGN = Alignment(wrap_text=True, vertical="top")
+    _CENTER_ALIGN = Alignment(horizontal="center", vertical="center", wrap_text=True)
+else:
+    _TITLE_FILL = None
+    _HEADER_FILL = None
+    _INFO_FILL = None
+    _THIN_BORDER = None
+    _TITLE_FONT = None
+    _HEADER_FONT = None
+    _INFO_FONT = None
+    _DATA_FONT = None
+    _WRAP_ALIGN = None
+    _CENTER_ALIGN = None
 
 
 @dataclass

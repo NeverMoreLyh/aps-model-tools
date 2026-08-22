@@ -2,8 +2,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from aps_model_tools.classification import audit_capabilities, classify_text, render_markdown
-from aps_model_tools.scanner import scan_workspace
+from apsgraph.classification import audit_capabilities, classify_text, render_markdown
+from apsgraph.scanner import scan_workspace
 
 
 class ClassificationTest(unittest.TestCase):

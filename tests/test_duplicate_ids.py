@@ -2,8 +2,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from aps_model_tools.scanner import scan_workspace
-from aps_model_tools.store import connect
+from apsgraph.scanner import scan_workspace
+from apsgraph.store import connect
 
 
 class DuplicateIdTest(unittest.TestCase):

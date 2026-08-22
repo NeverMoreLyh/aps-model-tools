@@ -1,6 +1,10 @@
 __pycache__/
+*.egg-info/
+.DS_Store
 *.py[cod]
 .venv/
 .data/
+.apsgraph/
 .pytest_cache/
 out/
+build/

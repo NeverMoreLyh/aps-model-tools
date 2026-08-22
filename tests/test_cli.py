@@ -1,9 +1,15 @@
+import contextlib
+import io
+import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
-from aps_model_tools.cli import main
-from aps_model_tools.store import connect
+import apsgraph.cli as cli_module
+from apsgraph.cli import main
+from apsgraph.store import connect
 
 
 class CliTest(unittest.TestCase):
@@ -28,6 +34,34 @@ class CliTest(unittest.TestCase):
         rc = main(["bridge", "anything", "--workspace", self.tmp.name,
                    "--db", str(self.db), "--codegraph", "invalid"])
         self.assertEqual(2, rc)
+
+    def test_xlsx_export_returns_clean_error_without_openpyxl(self):
+        error = ImportError("openpyxl is required for Excel export")
+        output = io.StringIO()
+        with mock.patch.object(cli_module, "export_excel", side_effect=error), \
+             contextlib.redirect_stdout(output):
+            rc = main(["xlsx-export", "--db", str(self.db), "--output-dir", str(self.tmp.name)])
+
+        self.assertEqual(2, rc)
+        self.assertEqual({"error": str(error)}, json.loads(output.getvalue()))
+
+    def test_scan_uses_workspace_and_database_defaults(self):
+        workspace = Path(self.tmp.name) / "workspace" / "repo"
+        model = workspace / "ap-base/src/main/resources/tables/SysParmTable.tables.xml"
+        model.parent.mkdir(parents=True)
+        model.write_text(
+            '<schema id="SysParmTable" package="p"><table id="t" name="t"><fields/></table></schema>',
+            encoding="utf-8",
+        )
+        old_cwd = Path.cwd()
+        try:
+            os.chdir(workspace)
+            rc = main(["scan"])
+        finally:
+            os.chdir(old_cwd)
+
+        self.assertEqual(0, rc)
+        self.assertTrue((workspace / ".apsgraph/apsgraph.db").is_file())
 
     def test_read_command_rejects_missing_database_without_creating_it(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -2,8 +2,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from aps_model_tools.scanner import scan_workspace, sync_workspace, workspace_status
-from aps_model_tools.store import connect, get_stats, references
+from apsgraph.scanner import scan_workspace, sync_workspace, workspace_status
+from apsgraph.store import connect, get_stats, references
 from tests.test_scanner import FIXTURE_FILES
 
 
@@ -66,7 +66,7 @@ class IncrementalV2Test(unittest.TestCase):
 
     def test_full_scan_failure_preserves_previous_index(self):
         from unittest.mock import patch
-        import aps_model_tools.scanner as scanner
+        import apsgraph.scanner as scanner
         scan_workspace(self.root, self.db)
         before = connect(self.db, read_only=True)
         before_counts = get_stats(before); before.close()
@@ -153,7 +153,7 @@ class IncrementalV2Test(unittest.TestCase):
 
     def test_sync_rolls_back_all_file_changes_on_unexpected_failure(self):
         from unittest.mock import patch
-        import aps_model_tools.scanner as scanner
+        import apsgraph.scanner as scanner
         scan_workspace(self.root, self.db)
         before = connect(self.db, read_only=True)
         before_counts = get_stats(before)

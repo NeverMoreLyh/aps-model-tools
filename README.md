@@ -1,13 +1,75 @@
-# APS Model Tools
+# APSGraph
 
 Read-only APS metadata scanner, compact SQLite relationship index, incremental sync, model-to-CodeGraph bridge, capability classification report, impact query, and Table-to-MySQL-DDL preview.
+
+## Install as a command
+
+```bash
+# Core CLI (standard library only)
+pip install .
+
+# Include Excel export
+pip install ".[excel]"
+
+# Development install with Excel export
+pip install -e ".[excel]"
+```
+
+This installs the `apsgraph` command. Dependencies are declared in `pyproject.toml`; a separate `requirements.txt` is not required for normal installation.
+
+## Default paths
+
+Run `apsgraph` from the APS workspace root whenever possible:
+
+- Default workspace: current directory
+- Default index: `.apsgraph/apsgraph.db`
+
+```bash
+cd /path/to/v8.7-all
+apsgraph scan
+apsgraph sync
+apsgraph status
+apsgraph stats
+```
+
+## Maven dependencies and framework JAR models
+
+`apsgraph scan` and `apsgraph sync` only read workspace XML and never invoke Maven. To build the workspace, copy resolved runtime dependencies, and combine their framework XML with workspace XML:
+
+```bash
+apsgraph scan --include-deps
+```
+
+Defaults are configurable:
+
+| Option | Default |
+|---|---|
+| Maven goal | `install` |
+| Tests | skipped (`-DskipTests`) |
+| Dependency scope | `runtime` (includes compile/runtime) |
+| Index | `.apsgraph/apsgraph.db` |
+| Cache | `.apsgraph/` |
+
+APSGraph discovers `pom.xml` projects, identifies Maven reactor/aggregator roots, and builds those roots in workspace dependency order, stops on the first failure, rejects different versions of the same dependency artifact ID, and only atomically publishes the completed index. Projects matching `*dist` are excluded from dependency analysis by default; use repeatable `--exclude-project PATTERN` for additional projects and `--no-default-project-excludes` to disable the default rule. Exclusion affects dependency analysis, not reactor builds. Existing indexes remain unchanged when a build, dependency check, or JAR XML import fails.
+
+To refresh dependency models in an existing index without rebuilding workspace XML:
+
+```bash
+apsgraph import-maven-deps
+```
+
+Add `--build` to run Maven `install` first. Manual JAR import remains available:
+
+```bash
+apsgraph import-jars --jar /path/to/aps-foundation.jar --jar /path/to/aps-common.jar
+```
+
+Imported JAR entries use logical `jar:<jar>!/<entry>` paths, are retained during workspace sync, and participate in reference resolution.
 
 ## Build or rebuild the index
 
 ```bash
-PYTHONPATH=src python3 -m aps_model_tools scan \
-  --workspace /Users/joshua/code/v8.7-all \
-  --db .data/v87-models-v2.db
+apsgraph scan
 ```
 
 `scan` is a full rebuild and upgrades known APS legacy indexes by rebuilding them as schema V2. It refuses databases containing unrelated tables; use a dedicated index path.
@@ -15,9 +77,7 @@ PYTHONPATH=src python3 -m aps_model_tools scan \
 ## Incrementally sync source changes
 
 ```bash
-PYTHONPATH=src python3 -m aps_model_tools sync \
-  --workspace /Users/joshua/code/v8.7-all \
-  --db .data/v87-models-v2.db
+apsgraph sync
 ```
 
 `sync` compares normalized relative paths and SHA-256 hashes, applies added/modified/deleted files in one transaction, then rebinds cross-file references. It refuses legacy schema files and indexes owned by another workspace.
@@ -25,23 +85,27 @@ PYTHONPATH=src python3 -m aps_model_tools sync \
 ## Query and preview DDL
 
 ```bash
-PYTHONPATH=src python3 -m aps_model_tools stats --db .data/v87-models-v2.db
-PYTHONPATH=src python3 -m aps_model_tools show SysDbTable.kapp_sundry_busi --db .data/v87-models-v2.db
-PYTHONPATH=src python3 -m aps_model_tools impact BpDict.A.addr --db .data/v87-models-v2.db
-PYTHONPATH=src python3 -m aps_model_tools ddl kapp_sundry_busi --dialect mysql --db .data/v87-models-v2.db
+apsgraph stats
+apsgraph show SysDbTable.kapp_sundry_busi
+apsgraph impact BpDict.A.addr
+apsgraph ddl kapp_sundry_busi --dialect mysql
 ```
 
-DDL output is a fail-closed experimental MySQL subset and is never executed.
+DDL output is a fail-closed experimental subset and is never executed.
 
 ## Bridge an APS model to generated Java and CodeGraph consumers
 
+Build generated Java first when `target/gen` is absent (normally with the project's Maven generate-sources/build goal):
+
 ```bash
-PYTHONPATH=src python3 -m aps_model_tools bridge \
-  SysParmTable.kapb_txn_log \
-  --workspace /Users/joshua/code/v8.7-all \
-  --db .data/v87-models.db \
-  --codegraph ap-parent=/Users/joshua/code/v8.7-all/ap-parent/.codegraph/codegraph.db \
-  --output .data/reports/kapb_txn_log-bridge.json
+cd /path/to/v8.7-all/ap-parent
+mvn generate-sources
+```
+
+Then run the bridge from the workspace root:
+
+```bash
+apsgraph bridge SysParmTable.kapb_txn_log --codegraph ap-parent=/path/to/v8.7-all/ap-parent/.codegraph/codegraph.db --output .apsgraph/reports/kapb_txn_log-bridge.json
 ```
 
 The bridge verifies `target/gen` directly using package, generated symbol, and `@ConfigType` evidence, then reads CodeGraph SQLite in immutable read-only mode to find indexed Java consumers. It never writes CodeGraph's private database. Coverage is explicit: repositories without a CodeGraph index are reported as gaps, and dynamic/runtime references remain out of scope.
@@ -49,11 +113,7 @@ The bridge verifies `target/gen` directly using package, generated symbol, and `
 ## Audit model and Java package capability grouping
 
 ```bash
-PYTHONPATH=src python3 -m aps_model_tools classify \
-  --workspace /Users/joshua/code/v8.7-all \
-  --db .data/v87-models.db \
-  --output .data/reports/v87-capability-audit.md \
-  --json-output .data/reports/v87-capability-audit.json
+apsgraph classify --output .apsgraph/reports/capability-audit.md --json-output .apsgraph/reports/capability-audit.json
 ```
 
 Classification uses model IDs, descriptions, paths, packages, and class names as evidence. It is a heuristic architecture audit, not an automatic rewrite: mixed and unclassified results require owner confirmation before moving models or Java packages.

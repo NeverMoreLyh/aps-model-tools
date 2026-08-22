@@ -1,7 +1,7 @@
 """Regression tests for db-diff (metadata model vs actual database schema comparison)."""
 import unittest
 
-from aps_model_tools.dbdiff import (
+from apsgraph.dbdiff import (
     ActualColumn, ActualIndex, ActualTable,
     ExpectedColumn, ExpectedIndex, ExpectedTable,
     canonicalize_dtype, compare_table, normalize_default, run_diff,
@@ -215,7 +215,7 @@ class RunDiffTest(unittest.TestCase):
         import tempfile
         from pathlib import Path
 
-        from aps_model_tools.dbdiff import dump_actual_json, load_actual_json
+        from apsgraph.dbdiff import dump_actual_json, load_actual_json
 
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "actual.json"

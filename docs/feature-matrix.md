@@ -1,7 +1,7 @@
-# APS Model Tools 功能支持清单
+# APSGraph 功能支持清单
 
 > 版本：0.3.0
-> 更新时间：2026-08-19
+> 更新时间：2026-08-22
 
 ---
 
@@ -18,6 +18,10 @@
 | 增量同步 | ✅ | SHA-256 文件指纹，单事务增删改 |
 | 同步状态检查 | ✅ | 文件差异统计 |
 | JAR 模型导入 | ✅ | 从 Maven 依赖 JAR 提取框架基础模型 |
+| Maven workspace 构建 | ✅ | `scan --include-deps` 识别 aggregator 根目录并按依赖拓扑执行默认 `install -DskipTests` |
+| 依赖模型一体化扫描 | ✅ | workspace XML + runtime 依赖 JAR XML，成功后原子发布 |
+| 依赖版本冲突阻断 | ✅ | 同一 artifact ID 出现多个版本立即失败，不部分导入 |
+| 项目依赖分析排除 | ✅ | 默认跳过 `*dist`，支持 `--exclude-project` glob 与关闭默认规则 |
 | 解析错误记录 | ✅ | 跳过并记录，可选 fail-on-parse-error |
 | 索引归属校验 | ✅ | 拒绝非本工作空间的索引 |
 | 遗留 V1 升级 | ✅ | 自动检测 V1 并重建为 V2 |
@@ -44,7 +48,7 @@
 | MySQL 方言 | ✅ | varchar/int/bigint/decimal/text/blob 等 |
 | Oracle 方言 | ✅ | varchar2/number/date/clob/blob 等 |
 | PostgreSQL 方言 | ✅ | varchar/integer/bigint/text/bytea 等 |
-| 类型映射 | ✅ | 逆向自 aps-model-util TableDdlUtil |
+| 类型映射 | ✅ | 逆向自 apsgraph-util TableDdlUtil |
 | 默认长度补齐 | ✅ | string=255, boolean=1, int=10, long=16, amount=20,2 |
 | varchar→text/clob 转换 | ✅ | `--text-threshold`（默认 1000） |
 | byCharacter 长度倍率 | ✅ | `--db-ratio`（默认 1.0） |
@@ -222,12 +226,12 @@
 
 ## 6. 与 dbm2 迁移工具的集成
 
-APS Model Tools 产出的 SQLite V2 索引可作为 dbm2 数据库迁移工具的可选校准源：
+APSGraph 产出的 SQLite V2 索引可作为 dbm2 数据库迁移工具的可选校准源：
 
 ```yaml
 # dbm2 application.yml
 migration:
-  calibration-sqlite-path: /path/to/v87-models.db
+ calibration-sqlite-path: /path/to/v87-models.db
 ```
 
 启用后 dbm2 迁移引擎参考 APS 元数据索引校准类型映射与迁移策略；未启用时使用默认规则。

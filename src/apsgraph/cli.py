@@ -12,6 +12,11 @@ from .ddl import generate_table_ddl
 from .ddlgen import DdlGenConfig, generate_all_ddl
 from .docx import DocExportReport, export_document
 from .impact import build_impact_report
+from .maven import (
+    DEFAULT_EXCLUDED_PROJECTS,
+    import_maven_dependencies,
+    scan_workspace_with_dependencies,
+)
 from .scanner import import_jar_models, scan_workspace, sync_workspace, workspace_status
 from .store import connect, find_nodes, get_stats, references
 from .xlsx_export import ExcelExportReport, export_excel
@@ -38,58 +43,120 @@ def _positive_depth(value: str) -> int:
     return depth
 
 
+DEFAULT_DB = Path(".apsgraph/apsgraph.db")
+DEFAULT_WORKSPACE = Path(".")
+
+
+def _project_excludes(args: argparse.Namespace) -> List[str]:
+    if args.no_default_project_excludes:
+        return list(args.exclude_project)
+    return list(DEFAULT_EXCLUDED_PROJECTS) + list(args.exclude_project)
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="aps-model", description="Read-only APS metadata model tools")
+    parser = argparse.ArgumentParser(prog="apsgraph", description="Read-only APS metadata graph tools")
     sub = parser.add_subparsers(dest="command", required=True)
 
     scan = sub.add_parser("scan")
-    scan.add_argument("--workspace", required=True, type=Path)
-    scan.add_argument("--db", required=True, type=Path)
+    scan.add_argument("--workspace", type=Path, default=DEFAULT_WORKSPACE,
+                        help="workspace root (default: current directory)")
+    scan.add_argument("--db", type=Path, default=DEFAULT_DB,
+                      help="SQLite index path (default: .apsgraph/apsgraph.db)")
     scan.add_argument("--fail-on-parse-error", action="store_true")
+    scan.add_argument("--include-deps", action="store_true",
+                      help="build Maven projects, copy resolved dependency jars, and include their model XML")
+    scan.add_argument("--maven-goal", action="append", default=None, metavar="GOAL",
+                      help="Maven goal (default: install); repeatable")
+    scan.add_argument("--skip-tests", dest="skip_tests", action="store_true", default=True,
+                      help="pass -DskipTests to Maven (default)")
+    scan.add_argument("--no-skip-tests", dest="skip_tests", action="store_false",
+                      help="run tests during Maven builds")
+    scan.add_argument("--deps-scope", choices=["compile", "runtime", "test"], default="runtime",
+                      help="dependency scope to copy and import (default: runtime)")
+    scan.add_argument("--maven", default="mvn", help="Maven executable (default: mvn)")
+    scan.add_argument("--cache-dir", type=Path, default=Path(".apsgraph"),
+                      help="workspace-relative cache directory (default: .apsgraph)")
+    scan.add_argument("--exclude-project", action="append", default=[], metavar="PATTERN",
+                      help="skip dependency analysis for a project glob; repeatable "
+                           "(matched against artifactId/project path)")
+    scan.add_argument("--no-default-project-excludes", action="store_true",
+                      help="disable the default '*dist' dependency-analysis exclusion")
 
     sync = sub.add_parser("sync")
-    sync.add_argument("--workspace", required=True, type=Path)
-    sync.add_argument("--db", required=True, type=Path)
+    sync.add_argument("--workspace", type=Path, default=DEFAULT_WORKSPACE,
+                       help="workspace root (default: current directory)")
+    sync.add_argument("--db", type=Path, default=DEFAULT_DB,
+                      help="SQLite index path (default: .apsgraph/apsgraph.db)")
     sync.add_argument("--fail-on-parse-error", action="store_true")
 
     status = sub.add_parser("status")
-    status.add_argument("--workspace", required=True, type=Path)
-    status.add_argument("--db", required=True, type=Path)
+    status.add_argument("--workspace", type=Path, default=DEFAULT_WORKSPACE,
+                         help="workspace root (default: current directory)")
+    status.add_argument("--db", type=Path, default=DEFAULT_DB,
+                       help="SQLite index path (default: .apsgraph/apsgraph.db)")
+
+    importdeps = sub.add_parser(
+        "import-maven-deps",
+        help="resolve Maven dependencies and replace JAR-imported models in an existing index",
+    )
+    importdeps.add_argument("--workspace", type=Path, default=DEFAULT_WORKSPACE,
+                            help="workspace root (default: current directory)")
+    importdeps.add_argument("--db", type=Path, default=DEFAULT_DB,
+                            help="SQLite index path (default: .apsgraph/apsgraph.db)")
+    importdeps.add_argument("--build", action="store_true",
+                            help="build workspace projects before resolving dependencies")
+    importdeps.add_argument("--maven-goal", action="append", default=None, metavar="GOAL",
+                            help="Maven goal used with --build (default: install); repeatable")
+    importdeps.add_argument("--skip-tests", dest="skip_tests", action="store_true", default=True,
+                            help="pass -DskipTests to Maven (default)")
+    importdeps.add_argument("--no-skip-tests", dest="skip_tests", action="store_false",
+                            help="run tests during Maven builds")
+    importdeps.add_argument("--deps-scope", choices=["compile", "runtime", "test"], default="runtime",
+                            help="dependency scope to copy and import (default: runtime)")
+    importdeps.add_argument("--maven", default="mvn", help="Maven executable (default: mvn)")
+    importdeps.add_argument("--cache-dir", type=Path, default=Path(".apsgraph"),
+                            help="workspace-relative cache directory (default: .apsgraph)")
+    importdeps.add_argument("--exclude-project", action="append", default=[], metavar="PATTERN",
+                            help="skip dependency analysis for a project glob; repeatable "
+                                 "(matched against artifactId/project path)")
+    importdeps.add_argument("--no-default-project-excludes", action="store_true",
+                            help="disable the default '*dist' dependency-analysis exclusion")
 
     importjars = sub.add_parser("import-jars",
                                 help="import APS model XML from Maven dependency jars (framework base models)")
-    importjars.add_argument("--db", required=True, type=Path)
+    importjars.add_argument("--db", type=Path, default=DEFAULT_DB,
+                                help="SQLite index path (default: .apsgraph/apsgraph.db)")
     importjars.add_argument("--jar", action="append", default=[], type=Path, metavar="JAR",
                             help="dependency jar to import; repeatable")
     importjars.add_argument("--no-reresolve", action="store_true",
                             help="skip re-resolving reference edges after import")
 
     stats = sub.add_parser("stats")
-    stats.add_argument("--db", required=True, type=Path)
+    stats.add_argument("--db", type=Path, default=DEFAULT_DB)
 
     show = sub.add_parser("show")
     show.add_argument("query")
-    show.add_argument("--db", required=True, type=Path)
+    show.add_argument("--db", type=Path, default=DEFAULT_DB)
 
     refs = sub.add_parser("refs")
     refs.add_argument("query")
-    refs.add_argument("--db", required=True, type=Path)
+    refs.add_argument("--db", type=Path, default=DEFAULT_DB)
     refs.add_argument("--direction", choices=["in", "out", "both"], default="both")
     refs.add_argument("--depth", type=_positive_depth, default=1)
 
     impact = sub.add_parser("impact")
     impact.add_argument("query")
-    impact.add_argument("--db", required=True, type=Path)
+    impact.add_argument("--db", type=Path, default=DEFAULT_DB)
     impact.add_argument("--depth", type=_positive_depth, default=3)
 
     ddl = sub.add_parser("ddl")
     ddl.add_argument("query")
-    ddl.add_argument("--db", required=True, type=Path)
+    ddl.add_argument("--db", type=Path, default=DEFAULT_DB)
     ddl.add_argument("--dialect", default="mysql")
     ddl.add_argument("--output", type=Path)
 
     ddlgen = sub.add_parser("ddl-gen", help="generate MySQL/Oracle/PostgreSQL DDL for all (or selected) tables from the SQLite model index")
-    ddlgen.add_argument("--db", required=True, type=Path)
+    ddlgen.add_argument("--db", type=Path, default=DEFAULT_DB)
     ddlgen.add_argument("--dialect", choices=["mysql", "oracle", "postgresql"], default="mysql")
     ddlgen.add_argument("--tables", nargs="*", default=[], metavar="QUERY",
                         help="optional table queries; default: all TABLE nodes")
@@ -108,7 +175,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     dbdiff = sub.add_parser("db-diff",
                             help="compare APS metadata model against a live database schema, table-granular ERROR/WARNING report")
-    dbdiff.add_argument("--db", required=True, type=Path, help="SQLite metadata index")
+    dbdiff.add_argument("--db", type=Path, default=DEFAULT_DB, help="SQLite metadata index")
     dbdiff.add_argument("--dialect", choices=["mysql", "oracle"], default="mysql",
                         help="target database dialect (postgresql pending psycopg driver)")
     dbdiff.add_argument("--dsn", default="",
@@ -131,21 +198,23 @@ def build_parser() -> argparse.ArgumentParser:
 
     bridge = sub.add_parser("bridge", help="map APS models to generated Java and CodeGraph consumers")
     bridge.add_argument("query")
-    bridge.add_argument("--db", required=True, type=Path)
-    bridge.add_argument("--workspace", required=True, type=Path)
+    bridge.add_argument("--db", type=Path, default=DEFAULT_DB)
+    bridge.add_argument("--workspace", type=Path, default=DEFAULT_WORKSPACE,
+                                help="workspace root (default: current directory)")
     bridge.add_argument("--codegraph", action="append", default=[], metavar="REPO=DB",
                         help="repository name and read-only CodeGraph database; repeatable")
     bridge.add_argument("--output", type=Path)
 
     classify = sub.add_parser("classify", help="audit APS models and Java packages by functional capability")
-    classify.add_argument("--db", required=True, type=Path)
-    classify.add_argument("--workspace", required=True, type=Path)
+    classify.add_argument("--db", type=Path, default=DEFAULT_DB)
+    classify.add_argument("--workspace", type=Path, default=DEFAULT_WORKSPACE,
+                             help="workspace root (default: current directory)")
     classify.add_argument("--output", required=True, type=Path)
     classify.add_argument("--json-output", type=Path)
 
     docexport = sub.add_parser("doc-export",
                                help="export model documentation as Markdown from the SQLite index")
-    docexport.add_argument("--db", required=True, type=Path, help="SQLite metadata index")
+    docexport.add_argument("--db", type=Path, default=DEFAULT_DB, help="SQLite metadata index")
     docexport.add_argument("--type", default="all",
                            choices=["all", "table", "dict", "schema", "trans", "nsql", "service"],
                            help="document type to export (default: all)")
@@ -155,7 +224,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     xls = sub.add_parser("xlsx-export",
                          help="export model documentation as Excel (.xlsx) files, aggregated by project")
-    xls.add_argument("--db", required=True, type=Path, help="SQLite metadata index")
+    xls.add_argument("--db", type=Path, default=DEFAULT_DB, help="SQLite metadata index")
     xls.add_argument("--output-dir", required=True, type=Path, help="output directory for .xlsx files")
     xls.add_argument("--types", nargs="*", default=[],
                      help="document types to export (default: all). Choices: table, table_list, "
@@ -182,8 +251,22 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         if args.command == "scan":
-            summary = scan_workspace(args.workspace, args.db, args.fail_on_parse_error)
-            _json(asdict(summary))
+            if args.include_deps:
+                result = scan_workspace_with_dependencies(
+                    args.workspace,
+                    args.db,
+                    goals=args.maven_goal or ["install"],
+                    skip_tests=args.skip_tests,
+                    dependency_scope=args.deps_scope,
+                    maven=args.maven,
+                    cache_dir=args.cache_dir,
+                    excluded_projects=_project_excludes(args),
+                    fail_on_parse_error=args.fail_on_parse_error,
+                )
+                _json(asdict(result))
+            else:
+                summary = scan_workspace(args.workspace, args.db, args.fail_on_parse_error)
+                _json(asdict(summary))
             return 0
         if args.command == "sync":
             summary = sync_workspace(args.workspace, args.db, args.fail_on_parse_error)
@@ -214,6 +297,20 @@ def main(argv: Optional[List[str]] = None) -> int:
                 args.json_output.write_text(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
             _json({"output": str(args.output), "json_output": str(args.json_output) if args.json_output else None,
                    "summary": result["summary"]})
+            return 0
+        if args.command == "import-maven-deps":
+            result = import_maven_dependencies(
+                args.workspace,
+                args.db,
+                goals=args.maven_goal or ["install"],
+                skip_tests=args.skip_tests,
+                dependency_scope=args.deps_scope,
+                build=args.build,
+                maven=args.maven,
+                cache_dir=args.cache_dir,
+                excluded_projects=_project_excludes(args),
+            )
+            _json(result)
             return 0
         if args.command == "import-jars":
             if not args.jar:
@@ -249,6 +346,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                 doc_types = args.types or None
                 project_filter = args.projects or None
                 reports = export_excel(conn, str(args.output_dir), doc_types, project_filter)
+            except ImportError as exc:
+                _json({"error": str(exc)})
+                return 2
             finally:
                 conn.close()
             _json([{

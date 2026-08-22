@@ -1,7 +1,7 @@
-# APS Model Tools 技术白皮书
+# APSGraph 技术白皮书
 
 > 版本：0.3.0
-> 更新时间：2026-08-19
+> 更新时间：2026-08-22
 > 项目地址：https://github.com/NeverMoreLyh/aps-model-tools
 
 ---
@@ -20,7 +20,7 @@
 | 功能架构缺乏全局视图 | 模型和代码按什么功能能力组织，缺乏审计手段 |
 | 多仓库跨域分析困难 | 模型在业务仓库，生成代码在 ap-parent，消费者在其他仓库 |
 
-APS Model Tools 正是为解决上述问题而设计的只读分析工具集。
+APSGraph 正是为解决上述问题而设计的只读分析工具集。
 
 ---
 
@@ -54,20 +54,20 @@ DDL 生成标注为实验性，遇到无法处理的场景（自定义 DDL 片�
 
 ```
 ┌──────────────────────────────────────────────────────────┐
-│                    CLI 入口 (cli.py)                      │
-│         scan / sync / impact / ddl-gen / db-diff ...     │
+│ CLI 入口 (cli.py) │
+│ scan / include-deps / import-maven-deps / impact / ddl-gen ... │
 ├──────────┬──────────┬──────────┬──────────┬──────────────┤
-│ scanner  │  store   │  impact  │ ddlgen   │   bridge     │
-│ (扫描器)  │ (索引层)  │ (影响分析)│(DDL生成) │ (CodeGraph桥接)│
+│ scanner │ maven │ store │ impact │ ddlgen │ bridge │
+│ (扫描器) │ (索引层) │ (影响分析)│(DDL生成) │ (CodeGraph桥接)│
 ├──────────┴──────────┴──────────┴──────────┴──────────────┤
-│              SQLite V2 关系索引 (.db 文件)                 │
-│  model_files │ nodes │ edges │ scan_state                 │
+│ SQLite V2 关系索引 (.db 文件) │
+│ model_files │ nodes │ edges │ scan_state │
 └──────────────────────────────────────────────────────────┘
-        ▲                                    ▲
-        │                                    │
-  APS XML 源码仓库                    CodeGraph SQLite 索引
-  (.tables.xml, .parms.xml,          (只读查询，不写入)
-   .flowtrans.xml, ...)
+ ▲ ▲
+ │ │
+ APS XML 源码仓库 CodeGraph SQLite 索引
+ (.tables.xml, .parms.xml, (只读查询，不写入)
+ .flowtrans.xml, ...)
 ```
 
 ### 3.2 模块职责
@@ -104,12 +104,12 @@ DDL 生成标注为实验性，遇到无法处理的场景（自定义 DDL 片�
 ### 3.4 增量同步机制
 
 ```
-源码工作空间                    SQLite 索引
-     │                              │
-     ├── file A (hash=a1)    file A (hash=a0) → MODIFIED
-     ├── file B (hash=b1)    file B (hash=b1) → UNCHANGED (skip)
-     ├── file C (new)              —           → ADDED
-     └── file D (deleted)    file D           → DELETED
+源码工作空间 SQLite 索引
+ │ │
+ ├── file A (hash=a1) file A (hash=a0) → MODIFIED
+ ├── file B (hash=b1) file B (hash=b1) → UNCHANGED (skip)
+ ├── file C (new) — → ADDED
+ └── file D (deleted) file D → DELETED
 ```
 
 同步流程：
@@ -132,22 +132,22 @@ DDL 生成标注为实验性，遇到无法处理的场景（自定义 DDL 片�
 
 ```
 BpDict.A.addr (字段变更)
-  ← TYPE_REF ← FIELD: SysDbTable.kapp_sundry_busi.amount
-    ← WRITES_TABLE ← NAMED_SQL: insert_sundry_busi
-      ← CALLS_TRANSACTION ← TRANSACTION: flow_sundry_save
+ ← TYPE_REF ← FIELD: SysDbTable.kapp_sundry_busi.amount
+ ← WRITES_TABLE ← NAMED_SQL: insert_sundry_busi
+ ← CALLS_TRANSACTION ← TRANSACTION: flow_sundry_save
 ```
 
 输出受影响节点列表、影响路径（按关系类型汇总）、未解析引用（questions）和建议操作。
 
 ### 4.2 DDL 生成
 
-逆向自 `aps-model-util` 的 `DdlGenerator` / `TableDdlUtil` 和 FreeMarker 模板（`mysql.ftl` / `oracle.ftl` / `postgresql.ftl`），实现统一的 DDL 生成器。
+逆向自 `apsgraph-util` 的 `DdlGenerator` / `TableDdlUtil` 和 FreeMarker 模板（`mysql.ftl` / `oracle.ftl` / `postgresql.ftl`），实现统一的 DDL 生成器。
 
 **生成管线**：
 ```
 SQLite 索引 → TABLE 节点 → FIELD 节点 → 类型链解析(RESTRICTION_TYPE → baseType)
-    → 类型映射(方言) → 长度/精度计算 → varchar→text/clob 转换
-    → 索引/主键 → 序列 → 注释(含枚举值) → DDL 输出
+ → 类型映射(方言) → 长度/精度计算 → varchar→text/clob 转换
+ → 索引/主键 → 序列 → 注释(含枚举值) → DDL 输出
 ```
 
 **与原模板的差异**：
@@ -172,10 +172,10 @@ SQLite 索引 → TABLE 节点 → FIELD 节点 → 类型链解析(RESTRICTION_
 
 ```
 APS 模型 (SQLite 索引)
-  → 推导生成 Java 符号 (包名 + 类名 + @ConfigType)
-  → 验证 target/gen 文件实际存在
-  → 查询 CodeGraph SQLite 找到消费者
-  → 输出桥接报告 (JSON)
+ → 推导生成 Java 符号 (包名 + 类名 + @ConfigType)
+ → 验证 target/gen 文件实际存在
+ → 查询 CodeGraph SQLite 找到消费者
+ → 输出桥接报告 (JSON)
 ```
 
 **置信度分级**：
@@ -209,18 +209,19 @@ APS 模型 (SQLite 索引)
 | 数据库密码 | `--dsn-env` 从环境变量读取，不进命令行历史 |
 | DSN 显示 | 报告中 DSN 自动脱敏（密码替换为 `***`） |
 | 索引隔离 | 拒绝非 APS 索引数据库，拒绝跨工作空间索引 |
+| Maven 集成 | 构建失败、依赖版本冲突、JAR XML 解析失败均不替换已有索引 |
 
 ---
 
 ## 6. 与 dbm2 迁移工具的协作
 
-APS Model Tools 产出的 SQLite V2 索引可作为 dbm2 数据库迁移工具的可选校准源：
+APSGraph 产出的 SQLite V2 索引可作为 dbm2 数据库迁移工具的可选校准源：
 
 ```
 APS 源码仓库
-  → aps-model scan → SQLite V2 索引 (v87-models.db)
-  → dbm2 calibration-sqlite-path 引用
-  → 迁移引擎校准类型映射与迁移策略
+ → apsgraph scan --include-deps → SQLite V2 索引 (v87-models.db)
+ → dbm2 calibration-sqlite-path 引用
+ → 迁移引擎校准类型映射与迁移策略
 ```
 
 启用校准后，dbm2 迁移引擎在 MySQL → Oracle/TDSQL/GoldenDB 迁移时参考 APS 元数据的类型定义、字段长度、约束等信息，提高类型映射准确性。

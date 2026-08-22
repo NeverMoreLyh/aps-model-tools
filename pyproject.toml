@@ -3,13 +3,17 @@ requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "aps-model-tools"
+name = "apsgraph"
 version = "0.3.0"
-description = "Read-only APS metadata model index and analysis tools"
+description = "Read-only APS metadata graph and CodeGraph bridge tools"
 requires-python = ">=3.9"
+dependencies = []
+
+[project.optional-dependencies]
+excel = ["openpyxl>=3.1"]
 
 [project.scripts]
-aps-model = "aps_model_tools.cli:main"
+apsgraph = "apsgraph.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

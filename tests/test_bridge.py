@@ -5,8 +5,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from aps_model_tools.bridge import build_bridge_report
-from aps_model_tools.scanner import scan_workspace
+from apsgraph.bridge import build_bridge_report
+from apsgraph.scanner import scan_workspace
 
 
 class BridgeTest(unittest.TestCase):

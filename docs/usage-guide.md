@@ -1,14 +1,14 @@
-# APS Model Tools 使用说明
+# APSGraph 使用说明
 
 > 版本：0.3.0
-> 更新时间：2026-08-19
+> 更新时间：2026-08-22
 > 项目地址：https://github.com/NeverMoreLyh/aps-model-tools
 
 ---
 
 ## 1. 项目简介
 
-APS Model Tools 是一套面向 APS 元数据模型的分析工具集，提供从源码仓库扫描 XML 模型、构建紧凑 SQLite 关系索引、增量同步、影响分析、DDL 生成、模型与数据库差异对比、CodeGraph 桥接、能力分类审计等能力。
+APSGraph 是一套面向 APS 元数据模型的分析工具集，提供从源码仓库扫描 XML 模型、构建紧凑 SQLite 关系索引、增量同步、影响分析、DDL 生成、模型与数据库差异对比、CodeGraph 桥接、能力分类审计等能力。
 
 **核心特征**：
 - **只读扫描**：不修改源码仓库任何文件
@@ -25,8 +25,8 @@ APS Model Tools 是一套面向 APS 元数据模型的分析工具集，提供�
 |---|---|
 | Python | ≥ 3.9 |
 | 操作系统 | macOS / Linux / Windows |
-| 依赖 | 无第三方运行时依赖（纯标准库） |
-| 可选 | sqlglot（db-diff 解析实际库 schema 时需要） |
+| 核心依赖 | 无第三方运行时依赖（纯标准库） |
+| 可选 | `sqlglot`（db-diff 解析实际库 schema 时需要）；`openpyxl`（xlsx-export 需要） |
 
 ---
 
@@ -36,15 +36,18 @@ APS Model Tools 是一套面向 APS 元数据模型的分析工具集，提供�
 # 方式一：pip 安装（推荐）
 pip install -e .
 
+# 如需 Excel 导出
+pip install -e ".[excel]"
+
 # 方式二：直接运行（无需安装）
 export PYTHONPATH=src
-python3 -m aps_model_tools --help
+python3 -m apsgraph --help
 ```
 
-安装后可用 `aps-model` 命令：
+安装后可用 `apsgraph` 命令：
 
 ```bash
-aps-model --help
+apsgraph --help
 ```
 
 ---
@@ -54,9 +57,11 @@ aps-model --help
 | 命令 | 说明 |
 |---|---|
 | `scan` | 全量扫描工作空间，构建/重建 SQLite V2 索引 |
+| `scan --include-deps` | 编译 Maven workspace，导入依赖 JAR 模型后原子发布索引 |
 | `sync` | 增量同步源码变更到已有索引 |
 | `status` | 查看工作空间与索引的同步状态 |
-| `import-jars` | 从 Maven 依赖 JAR 导入框架基础模型 |
+| `import-maven-deps` | 解析 Maven 依赖并替换已有索引中的 JAR 导入模型 |
+| `import-jars` | 手工从指定 Maven 依赖 JAR 导入框架基础模型 |
 | `stats` | 查看索引统计信息 |
 | `show` | 查看指定模型的完整属性和直接关系 |
 | `refs` | 查询模型的引用关系（入/出/双向，可指定深度） |
@@ -74,16 +79,24 @@ aps-model --help
 ### 5.1 scan — 全量扫描构建索引
 
 ```bash
-aps-model scan \
-  --workspace /path/to/v8.7-all \
-  --db .data/v87-models.db
+apsgraph scan
 ```
 
 | 参数 | 说明 |
 |---|---|
-| `--workspace` | APS 源码仓库根目录（必填） |
-| `--db` | SQLite 索引输出路径（必填） |
+| `--workspace` | APS 源码仓库根目录（默认当前目录） |
+| `--db` | SQLite 索引输出路径（默认 `.apsgraph/apsgraph.db`） |
 | `--fail-on-parse-error` | 遇到解析错误时立即终止（默认跳过并记录） |
+| `--include-deps` | 先执行 Maven workspace 构建，再导入依赖 JAR 模型 |
+| `--maven-goal` | Maven goal，可重复；默认 `install` |
+| `--skip-tests` / `--no-skip-tests` | 默认追加 `-DskipTests`，可改为执行测试 |
+| `--deps-scope` | 依赖范围：`compile` / `runtime` / `test`，默认 `runtime` |
+| `--maven` | Maven 可执行文件，默认 `mvn` |
+| `--cache-dir` | workspace 相对缓存目录，默认 `.apsgraph` |
+| `--exclude-project` | 跳过依赖分析的 project glob，可重复；匹配 artifactId 或项目相对路径 |
+| `--no-default-project-excludes` | 关闭默认 `*dist` 排除规则 |
+
+普通 `scan` 不要求 Maven。`scan --include-deps` 的流程为：发现全部 `pom.xml`（排除 `target` 等目录）→ 识别 Maven aggregator/reactor 根项目并按 workspace 内依赖关系拓扑排序 → 逐个 reactor 根目录执行默认 `mvn -B -DskipTests install` → 执行 `dependency:list` 与 `dependency:copy-dependencies` → 扫描 workspace XML 并导入依赖 JAR XML → 原子替换最终索引。任一 Maven 项目失败、同一 artifact ID 解析出多个版本、或依赖 XML 解析失败时立即退出，不替换已有索引。
 
 **扫描的文件类型**（27 种 XML 后缀）：
 `.tables.xml`、`.parms.xml`、`.flowtrans.xml`、`.nsql.xml`、`.batchStep.xml`、`.batchgroup.xml`、`.serviceType.xml`、`.serviceImpl.xml`、`.sharding.xml`、`.workflow.xml` 等。
@@ -93,9 +106,7 @@ aps-model scan \
 ### 5.2 sync — 增量同步
 
 ```bash
-aps-model sync \
-  --workspace /path/to/v8.7-all \
-  --db .data/v87-models.db
+apsgraph sync
 ```
 
 对比文件归一化相对路径和 SHA-256 哈希，在一个事务内处理新增/修改/删除文件，然后重新绑定跨文件引用。
@@ -103,28 +114,50 @@ aps-model sync \
 ### 5.3 status — 同步状态
 
 ```bash
-aps-model status \
-  --workspace /path/to/v8.7-all \
-  --db .data/v87-models.db
+apsgraph status
 ```
 
 返回工作空间与索引的文件差异统计。
 
-### 5.4 import-jars — 导入框架基础模型
+### 5.4 Maven 依赖与 JAR 模型
+
+一步完成构建、依赖复制和索引重建：
 
 ```bash
-aps-model import-jars \
-  --db .data/v87-models.db \
-  --jar /path/to/aps-foundation.jar \
-  --jar /path/to/aps-common.jar
+apsgraph scan --include-deps
 ```
 
-从 Maven 依赖 JAR 中提取 APS 模型 XML 导入索引，用于补充框架基础模型。可重复 `--jar` 指定多个。
+默认参数等价于 `--maven-goal install --skip-tests --deps-scope runtime --db .apsgraph/apsgraph.db`，所有参数均可显式覆盖。构建日志位于 `.apsgraph/logs/maven/`，依赖解析日志位于 `.apsgraph/logs/maven-dependencies/`，依赖清单位于 `.apsgraph/dependency-manifest.json`。默认跳过 artifactId 或项目路径匹配 `*dist` 的项目依赖分析；例如 `delivery-dist`、`packaging/*dist`。该规则只影响依赖解析与 JAR 导入，不影响 Maven reactor 构建。可用 `--exclude-project` 增加规则，例如 `--exclude-project 'packaging/*'`；添加 `--no-default-project-excludes` 可关闭默认规则。清单会记录 `projects_analyzed` 与 `projects_excluded`。
+
+已有索引只需刷新依赖模型时：
+
+```bash
+apsgraph import-maven-deps
+apsgraph import-maven-deps --build
+apsgraph import-maven-deps --deps-scope compile --maven-goal package --no-skip-tests
+```
+
+`import-maven-deps` 会先在 staging 数据库中删除旧的 `jar:` 逻辑文件，再导入本次解析到的 JAR，成功后原子替换原索引；`--build` 时才执行 Maven 构建。
+
+处理规则：
+
+1. `scan` / `sync` 只读取工作空间 XML，不需要先执行 Maven 构建；
+2. `scan --include-deps` 会执行构建并可能访问 Maven 仓库/网络；
+3. 多个项目依赖同一 artifact ID 的不同版本时直接失败，不做 newest/nearest 选择；
+4. JAR 条目使用 `jar:JAR路径!/条目路径` 作为逻辑路径；
+5. `sync` 不会把 JAR 导入内容误判为新增/删除文件；
+6. 不带 `--include-deps` 的 `scan` 是全量重建，会清空之前的 JAR 导入结果。
+
+手工导入仍然可用：
+
+```bash
+apsgraph import-jars --jar /path/to/aps-foundation.jar --jar /path/to/aps-common.jar
+```
 
 ### 5.5 stats — 索引统计
 
 ```bash
-aps-model stats --db .data/v87-models.db
+apsgraph stats
 ```
 
 返回节点数、边数、文件数、未解析引用数等统计信息。
@@ -132,7 +165,7 @@ aps-model stats --db .data/v87-models.db
 ### 5.6 show — 查看模型详情
 
 ```bash
-aps-model show SysDbTable.kapp_sundry_busi --db .data/v87-models.db
+apsgraph show SysDbTable.kapp_sundry_busi
 ```
 
 返回指定模型的完整属性（kind、full_id、properties）和一级关系。
@@ -140,10 +173,7 @@ aps-model show SysDbTable.kapp_sundry_busi --db .data/v87-models.db
 ### 5.7 refs — 引用关系查询
 
 ```bash
-aps-model refs BpDict.A.addr \
-  --db .data/v87-models.db \
-  --direction both \
-  --depth 2
+apsgraph refs BpDict.A.addr --direction both --depth 2
 ```
 
 | 参数 | 说明 |
@@ -155,9 +185,7 @@ aps-model refs BpDict.A.addr \
 ### 5.8 impact — 变更影响分析
 
 ```bash
-aps-model impact BpDict.A.addr \
-  --db .data/v87-models.db \
-  --depth 3
+apsgraph impact BpDict.A.addr --depth 3
 ```
 
 从目标模型反向追溯受影响节点，按关系类型汇总，输出受影响节点列表、影响路径和未解析引用。
@@ -165,21 +193,14 @@ aps-model impact BpDict.A.addr \
 ### 5.9 ddl — 单表 DDL 预览
 
 ```bash
-aps-model ddl kapp_sundry_busi \
-  --dialect mysql \
-  --db .data/v87-models.db
-```
+apsgraph ddl kapp_sundry_busi --dialect mysql ```
 
 生成单张表的建表 DDL（实验性，fail-closed，不自动执行）。
 
 ### 5.10 ddl-gen — 批量 DDL 生成
 
 ```bash
-aps-model ddl-gen \
-  --db .data/v87-models.db \
-  --dialect mysql \
-  --output output/schema.sql \
-  --report output/report.json
+apsgraph ddl-gen --dialect mysql --output output/schema.sql --report output/report.json
 ```
 
 | 参数 | 说明 |
@@ -200,19 +221,10 @@ aps-model ddl-gen \
 
 ```bash
 # 在线模式（直连 MySQL）
-aps-model db-diff \
-  --db .data/v87-models.db \
-  --dialect mysql \
-  --dsn "mysql://user:***@host:3306/db" \
-  --output-json output/diff.json \
-  --output-md output/diff.md
+apsgraph db-diff --dialect mysql --dsn "mysql://user:***@host:3306/db" --output-json output/diff.json --output-md output/diff.md
 
 # 离线模式（从 JSON 导出读取）
-aps-model db-diff \
-  --db .data/v87-models.db \
-  --actual-json output/actual-schema.json \
-  --output-json output/diff.json \
-  --output-md output/diff.md
+apsgraph db-diff --actual-json output/actual-schema.json --output-json output/diff.json --output-md output/diff.md
 ```
 
 | 参数 | 说明 |
@@ -233,11 +245,7 @@ aps-model db-diff \
 ### 5.12 bridge — 模型到 Java/CodeGraph 桥接
 
 ```bash
-aps-model bridge SysParmTable.kapb_txn_log \
-  --db .data/v87-models.db \
-  --workspace /path/to/v8.7-all \
-  --codegraph ap-parent=/path/to/.codegraph/codegraph.db \
-  --output output/bridge.json
+apsgraph bridge SysParmTable.kapb_txn_log --workspace /path/to/v8.7-all --codegraph ap-parent=/path/to/.codegraph/codegraph.db --output output/bridge.json
 ```
 
 验证 `target/gen` 生成代码（包名、生成符号、`@ConfigType` 注解证据），然后只读查询 CodeGraph SQLite 索引找到 Java 消费者。
@@ -252,11 +260,7 @@ aps-model bridge SysParmTable.kapb_txn_log \
 ### 5.13 classify — 能力分类审计
 
 ```bash
-aps-model classify \
-  --db .data/v87-models.db \
-  --workspace /path/to/v8.7-all \
-  --output output/audit.md \
-  --json-output output/audit.json
+apsgraph classify --workspace /path/to/v8.7-all --output output/audit.md --json-output output/audit.json
 ```
 
 基于模型 ID、描述、路径、包名、类名等证据，将 APS 模型和 Java 包按 34 种功能能力分类。
@@ -269,52 +273,47 @@ aps-model classify \
 
 ```bash
 # 1. 全量扫描
-aps-model scan --workspace /path/to/v8.7-all --db .data/v87-models.db
+apsgraph scan --workspace /path/to/v8.7-all
 
 # 2. 导入框架基础模型（可选）
-aps-model import-jars --db .data/v87-models.db --jar /path/to/aps-foundation.jar
+apsgraph import-jars --jar /path/to/aps-foundation.jar
 
 # 3. 验证统计
-aps-model stats --db .data/v87-models.db
+apsgraph stats
 ```
 
 ### 6.2 日常增量同步
 
 ```bash
 # 同步源码变更
-aps-model sync --workspace /path/to/v8.7-all --db .data/v87-models.db
+apsgraph sync --workspace /path/to/v8.7-all
 
 # 检查状态
-aps-model status --workspace /path/to/v8.7-all --db .data/v87-models.db
+apsgraph status --workspace /path/to/v8.7-all
 ```
 
 ### 6.3 变更影响评估
 
 ```bash
 # 分析某字段变更的影响范围
-aps-model impact BpDict.A.addr --db .data/v87-models.db --depth 3
+apsgraph impact BpDict.A.addr --depth 3
 ```
 
 ### 6.4 生成 DDL 脚本
 
 ```bash
 # 生成全量 MySQL DDL
-aps-model ddl-gen --db .data/v87-models.db --dialect mysql --output schema.sql
+apsgraph ddl-gen --dialect mysql --output schema.sql
 
 # 生成 Oracle DDL（含表空间）
-aps-model ddl-gen --db .data/v87-models.db --dialect oracle \
-  --username APPS --table-space USERS --output schema_oracle.sql
+apsgraph ddl-gen --dialect oracle --username APPS --table-space USERS --output schema_oracle.sql
 ```
 
 ### 6.5 模型与数据库差异审计
 
 ```bash
 # 对比模型与实际 MySQL 库
-aps-model db-diff \
-  --db .data/v87-models.db \
-  --dialect mysql \
-  --dsn-env MYSQL_DSN \
-  --output-md output/diff.md
+apsgraph db-diff --dialect mysql --dsn-env MYSQL_DSN --output-md output/diff.md
 ```
 
 ---

@@ -10,7 +10,7 @@ from pathlib import Path
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from aps_model_tools.docx import export_document, _bool_str, DocExportReport
+from apsgraph.docx import export_document, _bool_str, DocExportReport
 
 
 class TestBoolStr(unittest.TestCase):

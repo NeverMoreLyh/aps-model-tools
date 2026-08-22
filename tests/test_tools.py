@@ -2,10 +2,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from aps_model_tools.ddl import generate_table_ddl
-from aps_model_tools.impact import build_impact_report
-from aps_model_tools.scanner import scan_workspace
-from aps_model_tools.store import connect, find_nodes
+from apsgraph.ddl import generate_table_ddl
+from apsgraph.impact import build_impact_report
+from apsgraph.scanner import scan_workspace
+from apsgraph.store import connect, find_nodes
 from tests.test_scanner import FIXTURE_FILES
 
 

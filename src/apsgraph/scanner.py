@@ -23,7 +23,7 @@ SUFFIXES = (
     ".componentSchema.xml", ".report.xml", ".sharding.xml", ".webtran.xml",
     ".workflow.xml", ".transtest.xml",
 )
-EXCLUDED_DIRS = {".git", "target", ".idea", ".codegraph", ".hermes", "node_modules"}
+EXCLUDED_DIRS = {".git", "target", ".idea", ".codegraph", ".apsgraph", ".hermes", "node_modules"}
 SCANNER_VERSION = "2"
 
 TAG_KIND = {

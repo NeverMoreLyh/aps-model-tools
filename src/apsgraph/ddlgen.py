@@ -1,4 +1,4 @@
-"""统一 DDL 生成器：从 aps-model-tools SQLite 索引生成 MySQL/Oracle/PostgreSQL 建表脚本。
+"""统一 DDL 生成器：从 APSGraph SQLite 索引生成 MySQL/Oracle/PostgreSQL 建表脚本。
 
 规则基准见 docs/ddl-generation-rules.md（逆向自 aps-model-util 的 DdlGenerator/TableDdlUtil
 与 mysql.ftl/oracle.ftl/postgresql.ftl）。

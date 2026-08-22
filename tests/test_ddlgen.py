@@ -6,9 +6,9 @@ import unittest
 import zipfile
 from pathlib import Path
 
-from aps_model_tools.ddlgen import DdlGenConfig, generate_all_ddl
-from aps_model_tools.scanner import import_jar_models, scan_workspace
-from aps_model_tools.store import connect
+from apsgraph.ddlgen import DdlGenConfig, generate_all_ddl
+from apsgraph.scanner import import_jar_models, scan_workspace
+from apsgraph.store import connect
 
 WORKSPACE_FILES = {
     "datatype/Base.u_schema.xml": """<?xml version="1.0"?>
@@ -124,7 +124,7 @@ class DdlGenTest(unittest.TestCase):
         self.assertIn("text", pg.sql)
 
     def test_imported_jar_files_excluded_from_workspace_sync(self):
-        from aps_model_tools.scanner import workspace_status
+        from apsgraph.scanner import workspace_status
 
         jar_path = self.root / "kbase.jar"
         with zipfile.ZipFile(jar_path, "w") as archive:

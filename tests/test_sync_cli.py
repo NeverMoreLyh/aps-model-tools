@@ -5,9 +5,9 @@ from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
 
-from aps_model_tools.cli import main
-from aps_model_tools.scanner import scan_workspace
-from aps_model_tools.store import connect
+from apsgraph.cli import main
+from apsgraph.scanner import scan_workspace
+from apsgraph.store import connect
 from tests.test_scanner import FIXTURE_FILES
 
 

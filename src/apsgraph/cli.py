@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from dataclasses import asdict
+from dataclasses import replace as replace_dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from .bridge import build_bridge_report
 from .classification import audit_capabilities, render_markdown
@@ -14,7 +16,9 @@ from .docx import DocExportReport, export_document
 from .impact import build_impact_report
 from .maven import (
     DEFAULT_EXCLUDED_PROJECTS,
+    MavenJdkConfig,
     import_maven_dependencies,
+    load_maven_jdk_config,
     scan_workspace_with_dependencies,
 )
 from .scanner import import_jar_models, scan_workspace, sync_workspace, workspace_status
@@ -89,6 +93,46 @@ def _project_excludes(args: argparse.Namespace) -> List[str]:
     return list(dict.fromkeys(rules))
 
 
+def _parse_pair(value: str, option: str) -> Tuple[str, str]:
+    key, separator, configured = value.partition("=")
+    key = key.strip()
+    configured = configured.strip()
+    if not separator or not key or not configured:
+        raise ValueError(f"{option} must use KEY=VALUE")
+    return key, configured
+
+
+def _parse_pairs(values: List[str], option: str) -> Dict[str, str]:
+    result: Dict[str, str] = {}
+    for value in values:
+        key, configured = _parse_pair(value, option)
+        if key in result and result[key] != configured:
+            raise ValueError(f"duplicate {option} profile: {key}")
+        result[key] = configured
+    return result
+
+
+def _add_maven_jdk_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--jdk", default=None, metavar="PROFILE",
+                        help="JDK profile for all Maven execution (overrides workspace rules)")
+    parser.add_argument("--project-jdk", action="append", default=[], metavar="PROJECT=PROFILE",
+                        help="JDK profile for a Maven project/build-unit glob; repeatable")
+    parser.add_argument("--java-home", action="append", default=[], metavar="PROFILE=PATH",
+                        help="explicit JAVA_HOME for a JDK profile; repeatable")
+
+
+def _jdk_options(args: argparse.Namespace) -> Tuple[MavenJdkConfig, Optional[str], Mapping[str, str]]:
+    config = load_maven_jdk_config(args.workspace)
+    homes = _parse_pairs(args.java_home, "--java-home")
+    if homes:
+        config = replace_dataclass(config, java_homes={**config.java_homes, **homes})
+    return config, args.jdk, _parse_pairs(args.project_jdk, "--project-jdk")
+
+
+def _progress(message: str) -> None:
+    print(f"[apsgraph] {message}", file=sys.stderr, flush=True)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="apsgraph", description="Read-only APS metadata graph tools")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -117,6 +161,7 @@ def build_parser() -> argparse.ArgumentParser:
                            "(matched against artifactId/project path)")
     scan.add_argument("--no-default-project-excludes", action="store_true",
                       help="disable the default '*dist' dependency-analysis exclusion")
+    _add_maven_jdk_arguments(scan)
 
     sync = sub.add_parser("sync")
     sync.add_argument("--workspace", type=Path, default=DEFAULT_WORKSPACE,
@@ -157,6 +202,7 @@ def build_parser() -> argparse.ArgumentParser:
                                  "(matched against artifactId/project path)")
     importdeps.add_argument("--no-default-project-excludes", action="store_true",
                             help="disable the default '*dist' dependency-analysis exclusion")
+    _add_maven_jdk_arguments(importdeps)
 
     importjars = sub.add_parser("import-jars",
                                 help="import APS model XML from Maven dependency jars (framework base models)")
@@ -288,6 +334,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     try:
         if args.command == "scan":
             if args.include_deps:
+                jdk_config, jdk_profile, project_jdk = _jdk_options(args)
                 result = scan_workspace_with_dependencies(
                     args.workspace,
                     args.db,
@@ -298,6 +345,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                     cache_dir=args.cache_dir,
                     excluded_projects=_project_excludes(args),
                     fail_on_parse_error=args.fail_on_parse_error,
+                    jdk_config=jdk_config,
+                    jdk_profile=jdk_profile,
+                    project_jdk=project_jdk,
+                    progress=_progress,
                 )
                 _json(asdict(result))
             else:
@@ -335,6 +386,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                    "summary": result["summary"]})
             return 0
         if args.command == "import-maven-deps":
+            jdk_config, jdk_profile, project_jdk = _jdk_options(args)
             result = import_maven_dependencies(
                 args.workspace,
                 args.db,
@@ -345,6 +397,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                 maven=args.maven,
                 cache_dir=args.cache_dir,
                 excluded_projects=_project_excludes(args),
+                jdk_config=jdk_config,
+                jdk_profile=jdk_profile,
+                project_jdk=project_jdk,
+                progress=_progress,
             )
             _json(result)
             return 0

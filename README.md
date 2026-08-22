@@ -52,6 +52,28 @@ Defaults are configurable:
 
 APSGraph discovers `pom.xml` projects, identifies Maven reactor/aggregator roots, and builds those roots in workspace dependency order, stops on the first failure, rejects different versions of the same dependency artifact ID, and only atomically publishes the completed index. Projects matching `*dist` are excluded from dependency analysis by default. Workspace rules can be tracked in `.apsgraph.json` (`excludeProjects` or `maven.excludeProjects`), while repeatable `--exclude-project PATTERN` adds command-line overrides and `--no-default-project-excludes` disables the built-in default rule. Exclusion affects dependency analysis, not reactor builds. Existing indexes remain unchanged when a build, dependency check, or JAR XML import fails.
 
+Workspaces that mix JDK 8 and JDK 17 projects can define reactor-level JDK profiles. Resolution is fail-closed; a reactor that requires multiple `JAVA_HOME` values is rejected. CLI project overrides win over `--jdk`, which wins over workspace rules/default:
+
+```json
+{
+  "maven": {
+    "excludeProjects": ["*dist"],
+    "jdk": {
+      "default": "8",
+      "javaHomes": {
+        "8": "/Library/Java/JavaVirtualMachines/zulu-8.jdk/Contents/Home",
+        "17": "auto"
+      },
+      "rules": [
+        {"match": ["api-parent", "api-parent/*"], "jdk": "17"}
+      ]
+    }
+  }
+}
+```
+
+Use `--project-jdk PROJECT=PROFILE`, `--jdk PROFILE`, or `--java-home PROFILE=PATH` to override the workspace policy. The same resolved JDK is used for build, `dependency:list`, and `dependency:copy-dependencies`. During `scan --include-deps`, APSGraph prints major-stage and per-project progress to stderr while keeping machine-readable JSON on stdout.
+
 To refresh dependency models in an existing index without rebuilding workspace XML:
 
 ```bash

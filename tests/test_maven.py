@@ -12,10 +12,14 @@ import apsgraph.cli as cli_module
 from apsgraph.cli import build_parser
 from apsgraph.maven import (
     MavenError,
+    MavenJdkConfig,
+    MavenJdkRule,
     build_workspace,
     collect_dependencies,
     discover_maven_projects,
     import_maven_dependencies,
+    maven_jdk_config_from_payload,
+    resolve_jdk_selections,
     scan_workspace_with_dependencies,
 )
 from apsgraph.scanner import import_jar_models, scan_workspace
@@ -76,11 +80,16 @@ class FakeMaven:
         self.fail_build = fail_build
         self.builds = []
         self.commands = []
+        self.environments = []
 
-    def __call__(self, project: Path, command, log: Path):
+    def __call__(self, project: Path, command, log: Path, env=None, metadata=None):
         log.parent.mkdir(parents=True, exist_ok=True)
-        log.write_text("$ " + " ".join(command) + "\n", encoding="utf-8")
+        lines = ["$ " + " ".join(command)]
+        if metadata:
+            lines.extend(f"# {key}: {value}" for key, value in metadata.items())
+        log.write_text("\n".join(lines) + "\n", encoding="utf-8")
         self.commands.append(list(command))
+        self.environments.append(dict(env) if env else None)
         if "dependency:list" in command:
             artifact = project.name
             output = Path(next(value.split("=", 1)[1] for value in command if value.startswith("-DoutputFile=")))
@@ -291,6 +300,101 @@ class MavenWorkspaceTest(unittest.TestCase):
             cli_module._project_excludes(build_parser().parse_args([
                 "scan", "--include-deps", "--workspace", str(self.root)
             ]))
+
+    def test_jdk_config_is_parsed_and_profiles_fail_closed(self):
+        config = maven_jdk_config_from_payload({
+            "jdk": {
+                "default": "8",
+                "javaHomes": {"8": "auto", "17": "/opt/jdk17"},
+                "rules": [{"match": ["api-parent", "api-parent/*"], "jdk": "17"}],
+            }
+        })
+        self.assertEqual("8", config.default_profile)
+        self.assertEqual({"8": "auto", "17": "/opt/jdk17"}, config.java_homes)
+        self.assertEqual(("api-parent", "api-parent/*"), config.rules[0].match)
+
+        with self.assertRaisesRegex(ValueError, "maven.jdk.rules"):
+            maven_jdk_config_from_payload({"jdk": {"rules": [{"match": [], "jdk": "8"}]}})
+
+    def test_project_jdk_rules_select_reactor_profile(self):
+        write_pom(self.root / "aggregator/pom.xml", "aggregator", modules=("module",))
+        write_pom(self.root / "aggregator/module/pom.xml", "module")
+        projects = discover_maven_projects(self.root)
+        units = [self.root / "aggregator"]
+        java8 = self.root / "jdks" / "8"
+        java17 = self.root / "jdks" / "17"
+        java8.mkdir(parents=True)
+        java17.mkdir()
+        config = MavenJdkConfig(
+            java_homes={"8": str(java8), "17": str(java17)},
+            rules=(MavenJdkRule(("aggregator",), "8"),),
+        )
+        selections = resolve_jdk_selections(
+            self.root, projects, units, config=config, project_profiles={"aggregator": "17"}
+        )
+        self.assertEqual("17", selections[units[0].resolve()].profile)
+        self.assertEqual(java17.resolve(), selections[units[0].resolve()].java_home)
+
+        conflicting = MavenJdkConfig(
+            java_homes={"8": str(java8), "17": str(java17)},
+            rules=(
+                MavenJdkRule(("aggregator",), "8"),
+                MavenJdkRule(("aggregator/module",), "17"),
+            ),
+        )
+        with self.assertRaisesRegex(MavenError, "different JDK profiles"):
+            resolve_jdk_selections(self.root, projects, units, config=conflicting)
+
+    def test_same_jdk_is_used_for_build_and_dependencies(self):
+        java8 = self.root / "jdks" / "8"
+        java8.mkdir(parents=True)
+        runner = self.runner()
+        config = MavenJdkConfig(default_profile="8", java_homes={"8": str(java8)})
+        result = scan_workspace_with_dependencies(
+            self.root, self.db, runner=runner, jdk_config=config
+        )
+        self.assertEqual(2, len(result.build["jdk_profiles"]))
+        self.assertTrue(all(value == f"8 ({java8.resolve()})" for value in result.build["jdk_profiles"]))
+        self.assertEqual(6, len(runner.environments))
+        self.assertTrue(all(environment["JAVA_HOME"] == str(java8.resolve()) for environment in runner.environments))
+        self.assertTrue(all(environment["PATH"].startswith(str(java8.resolve() / "bin")) for environment in runner.environments))
+
+    def test_scan_progress_reports_key_stages(self):
+        messages = []
+        scan_workspace_with_dependencies(
+            self.root, self.db, runner=self.runner(), progress=messages.append
+        )
+        self.assertIn("stage 1/7 discover Maven projects", messages)
+        self.assertIn("stage 2/7 build Maven workspace", messages)
+        self.assertIn("stage 3/7 resolve Maven dependencies", messages)
+        self.assertIn("stage 4/7 check dependency versions", messages)
+        self.assertIn("stage 5/7 scan workspace XML", messages)
+        self.assertIn("stage 6/7 import dependency JAR models", messages)
+        self.assertIn("stage 7/7 publish index atomically", messages)
+        self.assertTrue(messages[-1].startswith("complete:"))
+
+    def test_jaxb_failure_includes_jdk_diagnostic(self):
+        class JaxbFailureMaven(FakeMaven):
+            def __call__(self, project, command, log, env=None, metadata=None):
+                result = super().__call__(project, command, log, env=env, metadata=metadata)
+                build = (
+                    project.name == "app"
+                    and "dependency:list" not in command
+                    and "dependency:copy-dependencies" not in command
+                )
+                if build:
+                    log.write_text(
+                        "Caused by: java.lang.ClassNotFoundException: javax.xml.bind.JAXBException\n",
+                        encoding="utf-8",
+                    )
+                    return subprocess.CompletedProcess(command, 1, "", "JAXB failure")
+                return result
+
+        runner = JaxbFailureMaven(
+            self.runner().dependencies, self.runner().jars, fail_build="app"
+        )
+        with self.assertRaisesRegex(MavenError, "JAXB compatibility error.*--jdk 8"):
+            scan_workspace_with_dependencies(self.root, self.db, runner=runner)
 
     def test_dependency_version_conflict_fails_closed(self):
         scan_workspace(self.root, self.db)

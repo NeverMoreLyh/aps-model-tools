@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import fnmatch
 import hashlib
+import inspect
 import json
 import os
 import re
@@ -32,6 +33,8 @@ _EXCLUDED_DIRECTORIES = {
     ".git", ".apsgraph", ".codegraph", ".idea", "target", "node_modules", ".hermes"
 }
 DEFAULT_EXCLUDED_PROJECTS = ("*dist",)
+JDK_PROFILE_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+ProgressCallback = Callable[[str], None]
 
 
 class MavenError(ValueError):
@@ -54,6 +57,45 @@ class MavenBuildReport:
     failed: List[str]
     commands: List[List[str]]
     logs: List[str]
+    jdk_profiles: List[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class MavenJdkRule:
+    match: Tuple[str, ...]
+    jdk: str
+
+
+@dataclass(frozen=True)
+class MavenJdkConfig:
+    """Workspace-level Maven JDK selection policy."""
+
+    default_profile: Optional[str] = None
+    java_homes: Mapping[str, str] = field(default_factory=dict)
+    rules: Tuple[MavenJdkRule, ...] = ()
+
+
+@dataclass(frozen=True)
+class MavenJdkSelection:
+    profile: Optional[str]
+    java_home: Optional[Path]
+
+    def environment(self) -> Optional[Dict[str, str]]:
+        if self.java_home is None:
+            return None
+        path = os.environ.get("PATH", "")
+        return {
+            **os.environ,
+            "JAVA_HOME": str(self.java_home),
+            "PATH": f"{self.java_home / 'bin'}{os.pathsep}{path}",
+        }
+
+    def summary(self) -> str:
+        if self.profile is None:
+            return "inherited"
+        if self.java_home is None:
+            return self.profile
+        return f"{self.profile} ({self.java_home})"
 
 
 @dataclass(frozen=True)
@@ -112,7 +154,7 @@ class FullScanResult:
     database: str
 
 
-CommandRunner = Callable[[Path, Sequence[str], Path], subprocess.CompletedProcess]
+CommandRunner = Callable[..., subprocess.CompletedProcess]
 
 
 def _relative(workspace_root: Path, path: Path) -> str:
@@ -134,21 +176,115 @@ def _resolve_cache(workspace: Path, cache_dir: Path | str) -> Path:
     return cache if cache.is_absolute() else workspace / cache
 
 
-def default_runner(project: Path, command: Sequence[str], log_path: Path) -> subprocess.CompletedProcess:
+def default_runner(
+    project: Path,
+    command: Sequence[str],
+    log_path: Path,
+    env: Optional[Mapping[str, str]] = None,
+    metadata: Optional[Mapping[str, object]] = None,
+) -> subprocess.CompletedProcess:
     log_path.parent.mkdir(parents=True, exist_ok=True)
+    java_version = ""
+    java_home = (env or {}).get("JAVA_HOME")
+    if java_home:
+        version_result = subprocess.run(
+            [str(Path(java_home) / "bin" / "java"), "-version"],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            check=False,
+        )
+        java_version = (version_result.stdout or "").strip()
     result = subprocess.run(
         list(command),
         cwd=str(project),
+        env=dict(env) if env is not None else None,
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         check=False,
     )
+    lines = ["$ " + " ".join(command)]
+    for key, value in (metadata or {}).items():
+        lines.append(f"# {key}: {value}")
+    if java_version:
+        lines.append("# java version: " + java_version.replace("\n", " | "))
     log_path.write_text(
-        "$ " + " ".join(command) + "\n\n" + (result.stdout or ""),
+        "\n".join(lines) + "\n\n" + (result.stdout or ""),
         encoding="utf-8",
     )
     return result
+
+
+def _run_maven(
+    runner: CommandRunner,
+    project: Path,
+    command: Sequence[str],
+    log_path: Path,
+    selection: Optional[MavenJdkSelection] = None,
+    workspace: Optional[Path] = None,
+) -> subprocess.CompletedProcess:
+    env = selection.environment() if selection else None
+    metadata: Dict[str, object] = {"command": " ".join(command)}
+    if workspace:
+        metadata["workspace"] = str(workspace)
+    metadata["project"] = str(project)
+    if selection:
+        metadata["jdk profile"] = selection.summary()
+        if selection.java_home:
+            metadata["JAVA_HOME"] = str(selection.java_home)
+    try:
+        signature = inspect.signature(runner)
+    except (TypeError, ValueError):
+        signature = None
+    if signature is None:
+        signature = inspect.Signature()
+
+    if env is not None and not _accepts_keyword(signature, "env"):
+        raise MavenError(
+            f"Maven runner {runner!r} must accept an optional 'env' keyword to use JDK profiles"
+        )
+    keywords = {}
+    if env is not None and _accepts_keyword(signature, "env"):
+        keywords["env"] = env
+    if _accepts_keyword(signature, "metadata"):
+        keywords["metadata"] = metadata
+    if not keywords:
+        return runner(project, command, log_path)
+    if env is not None and "env" not in keywords:
+        raise MavenError(
+            f"Maven runner {runner!r} must accept an optional 'env' keyword to use JDK profiles"
+        )
+    return runner(project, command, log_path, **keywords)
+    return runner(project, command, log_path, env=env, metadata=metadata)
+
+
+def _failure_message(message: str, log_path: Path, result: subprocess.CompletedProcess) -> str:
+    output = result.stdout or ""
+    try:
+        output += "\n" + log_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        pass
+    if "ClassNotFoundException: javax.xml.bind.JAXBException" in output:
+        return message + (
+            "\nDetected JAXB compatibility error. JDK 11+ removed javax.xml.bind; "
+            "legacy APS Maven plugins may require JDK 8. Configure maven.jdk in "
+            ".apsgraph.json or run with --jdk 8."
+        )
+    return message
+
+
+def _accepts_keyword(signature: inspect.Signature, name: str) -> bool:
+    parameter = signature.parameters.get(name)
+    if parameter is None:
+        return any(
+            parameter.kind == inspect.Parameter.VAR_KEYWORD
+            for parameter in signature.parameters.values()
+        )
+    return parameter.kind in {
+        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        inspect.Parameter.KEYWORD_ONLY,
+    }
 
 
 def _pom_project(pom: Path) -> MavenProject:
@@ -205,6 +341,149 @@ def discover_maven_projects(workspace: Path | str) -> List[MavenProject]:
     if not projects:
         raise MavenError(f"workspace contains no Maven projects: {root}")
     return projects
+
+
+def maven_jdk_config_from_payload(payload: Mapping[str, object]) -> MavenJdkConfig:
+    value = payload.get("jdk")
+    if value is None:
+        return MavenJdkConfig()
+    if not isinstance(value, dict):
+        raise ValueError("maven.jdk must be a JSON object")
+
+    default_profile = value.get("default")
+    if default_profile is not None and not isinstance(default_profile, str):
+        raise ValueError("maven.jdk.default must be a string")
+
+    raw_homes = value.get("javaHomes", {})
+    if not isinstance(raw_homes, dict):
+        raise ValueError("maven.jdk.javaHomes must be a JSON object")
+    java_homes: Dict[str, str] = {}
+    for profile, home in raw_homes.items():
+        if not isinstance(profile, str) or not JDK_PROFILE_PATTERN.match(profile):
+            raise ValueError(f"invalid JDK profile name: {profile!r}")
+        if not isinstance(home, str) or not home.strip():
+            raise ValueError(f"maven.jdk.javaHomes.{profile} must be a non-empty string")
+        java_homes[profile] = home
+
+    raw_rules = value.get("rules", [])
+    if not isinstance(raw_rules, list):
+        raise ValueError("maven.jdk.rules must be an array")
+    rules: List[MavenJdkRule] = []
+    for raw_rule in raw_rules:
+        if not isinstance(raw_rule, dict):
+            raise ValueError("each maven.jdk.rules entry must be a JSON object")
+        raw_match = raw_rule.get("match", [])
+        if isinstance(raw_match, str):
+            raw_match = [raw_match]
+        if (
+            not isinstance(raw_match, list) or not raw_match
+            or not all(isinstance(item, str) and item for item in raw_match)
+        ):
+            raise ValueError("maven.jdk.rules[].match must be a string or array of strings")
+        jdk = raw_rule.get("jdk")
+        if not isinstance(jdk, str) or not jdk:
+            raise ValueError("maven.jdk.rules[].jdk must be a non-empty string")
+        unknown = set(raw_rule) - {"match", "jdk"}
+        if unknown:
+            raise ValueError(f"unknown maven.jdk.rules fields: {', '.join(sorted(unknown))}")
+        rules.append(MavenJdkRule(tuple(raw_match), jdk))
+
+    unknown = set(value) - {"default", "javaHomes", "rules"}
+    if unknown:
+        raise ValueError(f"unknown maven.jdk fields: {', '.join(sorted(unknown))}")
+    return MavenJdkConfig(default_profile, java_homes, tuple(rules))
+
+
+def load_maven_jdk_config(workspace: Path | str) -> MavenJdkConfig:
+    config_path = Path(workspace) / ".apsgraph.json"
+    if not config_path.is_file():
+        return MavenJdkConfig()
+    try:
+        payload = json.loads(config_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"invalid {config_path}: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError(f"{config_path} must contain a JSON object")
+    maven_payload = payload.get("maven")
+    if maven_payload is None:
+        return MavenJdkConfig()
+    if not isinstance(maven_payload, dict):
+        raise ValueError("maven configuration must be a JSON object")
+    return maven_jdk_config_from_payload(maven_payload)
+
+
+def _project_match_values(workspace: Path, project: MavenProject) -> Set[str]:
+    relative = _relative(workspace, project.path)
+    return _project_exclusion_values(workspace, project) | {
+        relative,
+        f"{relative}/*",
+    }
+
+
+def _matched_profile(
+    patterns: Mapping[str, str],
+    workspace: Path,
+    project: MavenProject,
+) -> Optional[str]:
+    values = _project_match_values(workspace, project)
+    matches = [
+        (pattern, profile) for pattern, profile in patterns.items()
+        if any(fnmatch.fnmatch(value, pattern) for value in values)
+    ]
+    if len({profile for _, profile in matches}) > 1:
+        raise MavenError(
+            f"conflicting JDK overrides for {project.path}: "
+            + ", ".join(f"{pattern}={profile}" for pattern, profile in matches)
+        )
+    return matches[0][1] if matches else None
+
+
+def _configured_profile_for_project(
+    config: MavenJdkConfig,
+    workspace: Path,
+    project: MavenProject,
+) -> Optional[str]:
+    values = _project_match_values(workspace, project)
+    for rule in config.rules:
+        if any(fnmatch.fnmatch(value, pattern) for value in values for pattern in rule.match):
+            return rule.jdk
+    return None
+
+
+def _resolve_java_home(profile: str, configured_homes: Mapping[str, str]) -> Optional[Path]:
+    configured = configured_homes.get(profile)
+    if configured and configured != "auto":
+        path = Path(configured).expanduser()
+        if not path.is_dir():
+            raise MavenError(f"JDK {profile} JAVA_HOME does not exist or is not a directory: {path}")
+        return path.resolve()
+
+    environment_name = f"JAVA_HOME_{profile}"
+    environment_home = os.environ.get(environment_name)
+    if environment_home:
+        path = Path(environment_home).expanduser()
+        if not path.is_dir():
+            raise MavenError(
+                f"{environment_name} does not exist or is not a directory: {path}"
+            )
+        return path.resolve()
+
+    if configured == "auto":
+        result = subprocess.run(
+            ["/usr/libexec/java_home", "-v", profile],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            path = Path(result.stdout.strip())
+            if path.is_dir():
+                return path.resolve()
+    raise MavenError(
+        f"cannot resolve JDK {profile}; configure maven.jdk.javaHomes.{profile}, "
+        f"set JAVA_HOME_{profile}, or install the JDK"
+    )
 
 
 def _topological_projects(projects: Sequence[MavenProject]) -> List[MavenProject]:
@@ -317,6 +596,93 @@ def _build_units(projects: Sequence[MavenProject]) -> List[Path]:
         visit(root_path)
     return ordered
 
+
+def _owner_build_unit(project: Path, build_units: Sequence[Path]) -> Path:
+    resolved = project.resolve()
+    candidates = [
+        root for root in build_units
+        if resolved == root.resolve() or resolved.is_relative_to(root.resolve())
+    ]
+    candidates.sort(key=lambda root: len(root.parts), reverse=True)
+    return candidates[0] if candidates else resolved
+
+
+def resolve_jdk_selections(
+    workspace: Path | str,
+    projects: Sequence[MavenProject],
+    build_units: Sequence[Path],
+    config: Optional[MavenJdkConfig] = None,
+    global_profile: Optional[str] = None,
+    project_profiles: Optional[Mapping[str, str]] = None,
+) -> Dict[Path, MavenJdkSelection]:
+    """Resolve one JDK for every Maven reactor/build unit.
+
+    CLI project overrides win over the CLI global override, which wins over
+    workspace rules and the workspace default.  A reactor containing projects
+    that require different profiles is rejected because one Maven process can
+    have only one ``JAVA_HOME``.
+    """
+    root = Path(workspace).resolve()
+    config = config or MavenJdkConfig()
+    overrides = dict(project_profiles or {})
+    projects_by_unit: Dict[Path, List[MavenProject]] = {
+        unit.resolve(): [] for unit in build_units
+    }
+    for project in projects:
+        projects_by_unit.setdefault(_owner_build_unit(project.path, build_units).resolve(), []).append(project)
+
+    selections: Dict[Path, MavenJdkSelection] = {}
+    for unit in build_units:
+        resolved_unit = unit.resolve()
+        unit_projects = projects_by_unit.get(resolved_unit, [])
+        if not unit_projects:
+            selections[resolved_unit] = MavenJdkSelection(None, None)
+            continue
+
+        cli_profiles: Set[Optional[str]] = set()
+        for project in unit_projects:
+            cli_profiles.add(_matched_profile(overrides, root, project))
+        cli_profiles.discard(None)
+        if len(cli_profiles) > 1:
+            raise MavenError(
+                f"build unit {unit} resolves to conflicting CLI JDK profiles: "
+                f"{', '.join(sorted(str(value) for value in cli_profiles))}"
+            )
+
+        root_project = next(
+            (project for project in unit_projects if project.path.resolve() == resolved_unit),
+            unit_projects[0],
+        )
+        root_config_profile = _configured_profile_for_project(config, root, root_project)
+        selected_profiles: Dict[Path, Optional[str]] = {}
+        for project in unit_projects:
+            if cli_profiles:
+                selected_profiles[project.path.resolve()] = next(iter(cli_profiles))
+            elif global_profile:
+                selected_profiles[project.path.resolve()] = global_profile
+            else:
+                selected_profiles[project.path.resolve()] = (
+                    _configured_profile_for_project(config, root, project)
+                    or root_config_profile
+                    or config.default_profile
+                )
+
+        required = {profile for profile in selected_profiles.values() if profile is not None}
+        if len(required) > 1:
+            details = ", ".join(
+                f"{_relative(root, project)}={profile}"
+                for project, profile in selected_profiles.items()
+                if profile is not None
+            )
+            raise MavenError(
+                f"build unit {unit} contains projects requiring different JDK profiles; "
+                f"one Maven reactor cannot use multiple JAVA_HOME values: {details}"
+            )
+        profile = next(iter(required), None)
+        java_home = _resolve_java_home(profile, config.java_homes) if profile else None
+        selections[resolved_unit] = MavenJdkSelection(profile, java_home)
+    return selections
+
 def build_workspace(
     workspace: Path | str,
     goals: Sequence[str] = ("install",),
@@ -324,6 +690,10 @@ def build_workspace(
     maven: str = "mvn",
     cache_dir: Path | str = ".apsgraph",
     runner: CommandRunner = default_runner,
+    jdk_config: Optional[MavenJdkConfig] = None,
+    jdk_profile: Optional[str] = None,
+    project_jdk: Optional[Mapping[str, str]] = None,
+    progress: Optional[ProgressCallback] = None,
 ) -> Tuple[List[MavenProject], MavenBuildReport]:
     root = Path(workspace).resolve()
     normalized_goals = tuple(goals or ())
@@ -331,6 +701,10 @@ def build_workspace(
         raise MavenError("at least one Maven goal is required")
     projects = _topological_projects(discover_maven_projects(root))
     build_units = _build_units(projects)
+    jdk_selections = resolve_jdk_selections(
+        root, projects, build_units, config=jdk_config,
+        global_profile=jdk_profile, project_profiles=project_jdk,
+    )
     logs = _resolve_cache(root, cache_dir) / "logs" / "maven"
     report = MavenBuildReport(
         projects=[str(project) for project in build_units],
@@ -339,21 +713,35 @@ def build_workspace(
         failed=[],
         commands=[],
         logs=[],
+        jdk_profiles=[],
     )
-    for project in build_units:
+    for index, project in enumerate(build_units, 1):
+        selection = jdk_selections[project.resolve()]
+        if progress:
+            progress(
+                f"build [{index}/{len(build_units)}] {_relative(root, project)} "
+                f"using JDK {selection.summary()}"
+            )
         command = [maven, "-B"]
         if skip_tests:
             command.append("-DskipTests")
         command.extend(normalized_goals)
         log = logs / f"{_project_slug(root, project)}.log"
-        result = runner(project, command, log)
+        result = _run_maven(
+            runner, project, command, log, selection=selection, workspace=root
+        )
         report.build_order.append(str(project))
         report.commands.append(list(command))
         report.logs.append(str(log))
+        report.jdk_profiles.append(selection.summary())
         if result.returncode != 0:
             report.failed.append(str(project))
             raise MavenError(
-                f"Maven build failed for {project} (exit {result.returncode}); log: {log}"
+                _failure_message(
+                    f"Maven build failed for {project} (exit {result.returncode}); log: {log}",
+                    log,
+                    result,
+                )
             )
         report.succeeded.append(str(project))
     return projects, report
@@ -473,6 +861,8 @@ def collect_dependencies(
     cache_dir: Path | str = ".apsgraph",
     excluded_projects: Sequence[str] = DEFAULT_EXCLUDED_PROJECTS,
     runner: CommandRunner = default_runner,
+    jdk_selections: Optional[Mapping[Path, MavenJdkSelection]] = None,
+    progress: Optional[ProgressCallback] = None,
 ) -> DependencyInventory:
     root = Path(workspace).resolve()
     cache = _resolve_cache(root, cache_dir)
@@ -492,7 +882,25 @@ def collect_dependencies(
     excluded_reactor: Set[str] = set()
     project_dependencies: Dict[str, List[MavenDependency]] = {}
 
-    for project in analysis_projects:
+    def jdk_for(project: MavenProject) -> Optional[MavenJdkSelection]:
+        if not jdk_selections:
+            return None
+        resolved = project.path.resolve()
+        candidates = [
+            (unit, selection) for unit, selection in jdk_selections.items()
+            if resolved == unit.resolve() or resolved.is_relative_to(unit.resolve())
+        ]
+        candidates.sort(key=lambda item: len(item[0].parts), reverse=True)
+        return candidates[0][1] if candidates else None
+
+    for index, project in enumerate(analysis_projects, 1):
+        selection = jdk_for(project)
+        if progress:
+            progress(
+                f"dependencies [{index}/{len(analysis_projects)}] "
+                f"{_relative(root, project.path)}"
+                + (f" using JDK {selection.summary()}" if selection else "")
+            )
         slug = _project_slug(root, project.path)
         list_log = logs_dir / f"{slug}.list.log"
         list_output = logs_dir / f"{slug}.dependencies.txt"
@@ -503,11 +911,18 @@ def collect_dependencies(
             f"-DoutputFile={list_output.resolve()}",
             "-DoutputAbsoluteArtifactFilename=false",
         ]
-        result = runner(project.path, list_command, list_log)
+        result = _run_maven(
+            runner, project.path, list_command, list_log,
+            selection=selection, workspace=root,
+        )
         if result.returncode != 0:
             raise MavenError(
-                f"Maven dependency:list failed for {project.path} "
-                f"(exit {result.returncode}); log: {list_log}"
+                _failure_message(
+                    f"Maven dependency:list failed for {project.path} "
+                    f"(exit {result.returncode}); log: {list_log}",
+                    list_log,
+                    result,
+                )
             )
         if not list_output.is_file():
             raise MavenError(f"Maven dependency:list did not create output: {list_output}")
@@ -534,13 +949,22 @@ def collect_dependencies(
             "-Doverwrite=true",
         ]
         copy_log = logs_dir / f"{slug}.copy.log"
-        result = runner(project.path, copy_command, copy_log)
+        result = _run_maven(
+            runner, project.path, copy_command, copy_log,
+            selection=selection, workspace=root,
+        )
         if result.returncode != 0:
             raise MavenError(
-                f"Maven dependency:copy-dependencies failed for {project.path} "
-                f"(exit {result.returncode}); log: {copy_log}"
+                _failure_message(
+                    f"Maven dependency:copy-dependencies failed for {project.path} "
+                    f"(exit {result.returncode}); log: {copy_log}",
+                    copy_log,
+                    result,
+                )
             )
 
+    if progress:
+        progress("stage 4/7 check dependency versions")
     # The user chose fail-closed conflict handling.  Do not try to select the
     # nearest/newest version and do not import a partial graph.
     artifact_versions: Dict[str, Set[str]] = {}
@@ -700,17 +1124,35 @@ def scan_workspace_with_dependencies(
     excluded_projects: Sequence[str] = DEFAULT_EXCLUDED_PROJECTS,
     fail_on_parse_error: bool = False,
     runner: CommandRunner = default_runner,
+    jdk_config: Optional[MavenJdkConfig] = None,
+    jdk_profile: Optional[str] = None,
+    project_jdk: Optional[Mapping[str, str]] = None,
+    progress: Optional[ProgressCallback] = None,
 ) -> FullScanResult:
     root = Path(workspace).resolve()
     target = Path(db_path).resolve()
     target.parent.mkdir(parents=True, exist_ok=True)
+    if progress:
+        progress(f"workspace: {root}")
+        progress("stage 1/7 discover Maven projects")
+        progress("stage 2/7 build Maven workspace")
     projects, build_report = build_workspace(
         root, goals=goals, skip_tests=skip_tests, maven=maven,
-        cache_dir=cache_dir, runner=runner,
+        cache_dir=cache_dir, runner=runner, jdk_config=jdk_config,
+        jdk_profile=jdk_profile, project_jdk=project_jdk, progress=progress,
     )
+    build_units = _build_units(projects)
+    jdk_selections = resolve_jdk_selections(
+        root, projects, build_units, config=jdk_config,
+        global_profile=jdk_profile, project_profiles=project_jdk,
+    )
+    if progress:
+        progress(f"discovered {len(projects)} POMs, {len(build_units)} build units")
+        progress("stage 3/7 resolve Maven dependencies")
     inventory = collect_dependencies(
         root, projects, scope=dependency_scope, maven=maven,
         cache_dir=cache_dir, excluded_projects=excluded_projects, runner=runner,
+        jdk_selections=jdk_selections, progress=progress,
     )
 
     fd, staging_name = tempfile.mkstemp(
@@ -720,17 +1162,25 @@ def scan_workspace_with_dependencies(
     staging = Path(staging_name)
     staging.unlink()
     try:
+        if progress:
+            progress("stage 5/7 scan workspace XML")
         scan_summary = scan_workspace(root, staging, fail_on_parse_error=fail_on_parse_error)
+        if progress:
+            progress("stage 6/7 import dependency JAR models")
         import_result = import_jar_models(staging, inventory.jars)
         if import_result["failed_files"]:
             raise MavenError(
                 f"{import_result['failed_files']} dependency model file(s) failed to parse"
             )
         _annotate_manifest_models(inventory, import_result)
+        if progress:
+            progress("stage 7/7 publish index atomically")
         os.replace(staging, target)
     finally:
         if staging.exists():
             staging.unlink()
+    if progress:
+        progress(f"complete: {target}")
     return FullScanResult(
         scan=asdict(scan_summary),
         build=asdict(build_report),
@@ -751,16 +1201,26 @@ def import_maven_dependencies(
     cache_dir: Path | str = ".apsgraph",
     excluded_projects: Sequence[str] = DEFAULT_EXCLUDED_PROJECTS,
     runner: CommandRunner = default_runner,
+    jdk_config: Optional[MavenJdkConfig] = None,
+    jdk_profile: Optional[str] = None,
+    project_jdk: Optional[Mapping[str, str]] = None,
+    progress: Optional[ProgressCallback] = None,
 ) -> Dict[str, object]:
     root = Path(workspace).resolve()
     target = Path(db_path).resolve()
     if not target.is_file():
         raise FileNotFoundError(f"index database does not exist: {target}")
 
+    if progress:
+        progress(f"workspace: {root}")
+        progress("stage 1/4 discover Maven projects")
     if build:
+        if progress:
+            progress("stage 2/4 build Maven workspace")
         projects, build_report = build_workspace(
             root, goals=goals, skip_tests=skip_tests, maven=maven,
-            cache_dir=cache_dir, runner=runner,
+            cache_dir=cache_dir, runner=runner, jdk_config=jdk_config,
+            jdk_profile=jdk_profile, project_jdk=project_jdk, progress=progress,
         )
     else:
         projects = _topological_projects(discover_maven_projects(root))
@@ -771,10 +1231,19 @@ def import_maven_dependencies(
             failed=[],
             commands=[],
             logs=[],
+            jdk_profiles=[],
         )
+    build_units = _build_units(projects)
+    jdk_selections = resolve_jdk_selections(
+        root, projects, build_units, config=jdk_config,
+        global_profile=jdk_profile, project_profiles=project_jdk,
+    )
+    if progress:
+        progress("stage 3/4 resolve Maven dependencies")
     inventory = collect_dependencies(
         root, projects, scope=dependency_scope, maven=maven,
         cache_dir=cache_dir, excluded_projects=excluded_projects, runner=runner,
+        jdk_selections=jdk_selections, progress=progress,
     )
 
     fd, staging_name = tempfile.mkstemp(
@@ -783,6 +1252,8 @@ def import_maven_dependencies(
     os.close(fd)
     staging = Path(staging_name)
     try:
+        if progress:
+            progress("stage 4/4 replace JAR models atomically")
         _copy_database(target, staging)
         _clear_imported_jars(staging)
         import_result = import_jar_models(staging, inventory.jars)

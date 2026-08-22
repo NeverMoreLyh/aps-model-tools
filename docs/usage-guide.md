@@ -1,6 +1,6 @@
 # APSGraph 使用说明
 
-> 版本：0.3.1
+> 版本：0.4.0
 > 更新时间：2026-08-22
 > 项目地址：https://github.com/NeverMoreLyh/aps-model-tools
 
@@ -96,8 +96,13 @@ apsgraph scan
 | `--exclude-project` | 跳过依赖分析的 project glob，可重复；匹配 artifactId 或项目相对路径 |
 | `.apsgraph.json` | workspace 级项目规则文件，可配置 `excludeProjects` 或 `maven.excludeProjects` |
 | `--no-default-project-excludes` | 关闭默认 `*dist` 排除规则 |
+| `--jdk` | 全局 JDK profile 覆盖，优先级高于 workspace 规则 |
+| `--project-jdk` | 项目/reactor glob 的 JDK profile 覆盖，格式 `PROJECT=PROFILE`，可重复 |
+| `--java-home` | profile 的显式 `JAVA_HOME`，格式 `PROFILE=PATH`，可重复 |
 
 普通 `scan` 不要求 Maven。`scan --include-deps` 的流程为：发现全部 `pom.xml`（排除 `target` 等目录）→ 识别 Maven aggregator/reactor 根项目并按 workspace 内依赖关系拓扑排序 → 逐个 reactor 根目录执行默认 `mvn -B -DskipTests install` → 执行 `dependency:list` 与 `dependency:copy-dependencies` → 扫描 workspace XML 并导入依赖 JAR XML → 原子替换最终索引。任一 Maven 项目失败、同一 artifact ID 解析出多个版本、或依赖 XML 解析失败时立即退出，不替换已有索引。
+
+进度日志输出到 stderr，最终 JSON 仍输出到 stdout，便于管道处理。关键阶段包括项目发现、workspace 构建、每个 reactor 构建、依赖解析、版本冲突检查、workspace XML 扫描、JAR 模型导入和原子发布。
 
 **扫描的文件类型**（27 种 XML 后缀）：
 `.tables.xml`、`.parms.xml`、`.flowtrans.xml`、`.nsql.xml`、`.batchStep.xml`、`.batchgroup.xml`、`.serviceType.xml`、`.serviceImpl.xml`、`.sharding.xml`、`.workflow.xml` 等。
@@ -147,6 +152,31 @@ apsgraph scan --include-deps
 ```
 
 项目级规则始终生效；默认跳过 artifactId 或项目路径匹配 `*dist` 的项目依赖分析；例如 `delivery-dist`、`packaging/*dist`。该规则只影响依赖解析与 JAR 导入，不影响 Maven reactor 构建。可用 `--exclude-project` 增加规则，例如 `--exclude-project 'packaging/*'`；添加 `--no-default-project-excludes` 可关闭默认规则。清单会记录 `projects_analyzed` 与 `projects_excluded`。
+
+#### 混合 JDK workspace
+
+旧 APS Maven 插件可能要求 Maven 进程运行在 JDK 8；JDK 11+ 移除 `javax.xml.bind` 后会出现 `ClassNotFoundException: javax.xml.bind.JAXBException`。不要依赖 Maven 插件自动补依赖，应在 `.apsgraph.json` 中按 Maven reactor/build unit 配置 JDK：
+
+```json
+{
+  "maven": {
+    "excludeProjects": ["*dist"],
+    "jdk": {
+      "default": "8",
+      "javaHomes": {
+        "8": "/Library/Java/JavaVirtualMachines/zulu-8.jdk/Contents/Home",
+        "17": "auto"
+      },
+      "rules": [
+        {"match": ["api-parent", "api-parent/*"], "jdk": "17"},
+        {"match": ["ap-parent", "ap-parent/*"], "jdk": "8"}
+      ]
+    }
+  }
+}
+```
+
+`javaHomes` 支持显式路径、`auto`（macOS 调用 `/usr/libexec/java_home -v PROFILE`）以及 `JAVA_HOME_8` / `JAVA_HOME_17` 环境变量。profile 无法解析、或同一个 reactor 内不同项目解析出多个 profile 时立即失败，不会静默替换 JDK。解析优先级为 `--project-jdk` > `--jdk` > workspace rule > workspace default > 当前环境 `JAVA_HOME`。同一项目的 build、dependency:list、dependency:copy-dependencies 三个阶段使用同一个 `JAVA_HOME`。检测到 JAXB 缺类错误时，APSGraph 保留原始日志路径并附加 JDK 8 诊断提示。
 
 已有索引只需刷新依赖模型时：
 

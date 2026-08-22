@@ -496,7 +496,7 @@ class MavenWorkspaceTest(unittest.TestCase):
             [Path(value).name for value in report.build_order],
         )
 
-    def test_workspace_aggregators_and_parents_are_not_dependency_analyzed(self):
+    def test_workspace_aggregators_skip_but_top_parent_boundary_is_analyzed(self):
         isolated = self.root / "structural"
         write_pom(isolated / "pom.xml", "aggregate", modules=("child",), packaging="pom")
         write_pom(isolated / "child/pom.xml", "child")
@@ -509,12 +509,48 @@ class MavenWorkspaceTest(unittest.TestCase):
         )
         inventory = collect_dependencies(isolated, projects, runner=runner)
 
-        self.assertEqual(2, inventory.projects_analyzed)
+        self.assertEqual(3, inventory.projects_analyzed)
         self.assertEqual(
-            {"aggregate", "standalone-parent"},
+            {"aggregate"},
             {record.split(" ", 1)[0] for record in inventory.projects_excluded},
         )
-        self.assertEqual(4, sum(any("dependency:" in value for value in command) for command in runner.commands))
+        self.assertEqual(6, sum(any("dependency:" in value for value in command) for command in runner.commands))
+
+    def test_only_top_workspace_parent_boundary_is_dependency_analyzed(self):
+        isolated = self.root / "parent-chain"
+        write_pom(
+            isolated / "ap-parent/pom.xml", "ap-parent",
+            modules=("module",), packaging="pom", parent_group="cn.external",
+        )
+        write_pom(
+            isolated / "ap-out-parent/pom.xml", "ap-out-parent",
+            parent="ap-parent", packaging="pom",
+        )
+        write_pom(
+            isolated / "prod-parent/pom.xml", "prod-parent",
+            parent="ap-out-parent", modules=("app",), packaging="pom",
+        )
+        write_pom(isolated / "prod-parent/app/pom.xml", "app", parent="prod-parent")
+        projects = discover_maven_projects(isolated)
+        runner = FakeMaven(
+            dependencies={"ap-parent": [], "ap-out-parent": [], "prod-parent": [], "app": []},
+            jars={},
+        )
+        inventory = collect_dependencies(isolated, projects, runner=runner)
+
+        self.assertEqual(2, inventory.projects_analyzed)
+        self.assertEqual(
+            {"ap-out-parent", "prod-parent"},
+            {record.split(" ", 1)[0] for record in inventory.projects_excluded},
+        )
+        list_outputs = {
+            next(value for value in command if value.startswith("-DoutputFile="))
+            for command in runner.commands if "dependency:list" in command
+        }
+        self.assertEqual(
+            {"ap-parent.dependencies.txt", "prod-parent_app.dependencies.txt"},
+            {Path(value.split("=", 1)[1]).name for value in list_outputs},
+        )
 
     def test_independent_build_units_and_dependencies_run_in_parallel(self):
         isolated = self.root / "parallel"

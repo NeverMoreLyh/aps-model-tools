@@ -1,6 +1,6 @@
 # APSGraph 功能支持清单
 
-> 版本：0.6.0
+> 版本：0.7.0
 > 更新时间：2026-08-23
 
 ---
@@ -25,7 +25,7 @@
 | 扫描阶段日志 | ✅ | `scan --include-deps` 在 stderr 输出关键阶段与项目进度，stdout 保持 JSON |
 | Maven 阶段并行 | ✅ | build 与 dependencies 两阶段串行；阶段内独立 reactor/项目按 `--jobs` 并行 |
 | 依赖版本冲突阻断 | ✅ | 同一 `groupId:artifactId` 出现多个版本立即失败；不同 groupId 复用 artifact ID、多项目复用同一版本均不冲突 |
-| 项目依赖分析排除 | ✅ | 默认跳过 `*dist` 与结构性 parent/aggregator POM，支持 `.apsgraph.json` 项目规则、`--exclude-project` glob 与关闭默认规则 |
+| 项目依赖分析排除 | ✅ | 默认跳过 `*dist`、普通 aggregator 与中间 workspace parent；只解析本地 parent 链最高边界，支持 `.apsgraph.json` 项目规则、`--exclude-project` glob 与关闭默认规则 |
 | 解析错误记录 | ✅ | 跳过并记录，可选 fail-on-parse-error |
 | 索引归属校验 | ✅ | 拒绝非本工作空间的索引 |
 | 遗留 V1 升级 | ✅ | 自动检测 V1 并重建为 V2 |

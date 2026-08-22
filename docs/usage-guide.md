@@ -1,6 +1,6 @@
 # APSGraph 使用说明
 
-> 版本：0.6.0
+> 版本：0.7.0
 > 更新时间：2026-08-23
 > 项目地址：https://github.com/NeverMoreLyh/aps-model-tools
 
@@ -169,7 +169,7 @@ apsgraph scan --include-deps
 }
 ```
 
-除了显式排除规则外，`packaging=pom`、带 `<modules>` 的 aggregator、以及被 workspace 内项目引用为 parent 的 POM 均为结构性项目，不再执行依赖解析，避免重复展开所有子模块的传递依赖。项目级规则始终生效；默认跳过 artifactId 或项目路径匹配 `*dist` 的项目依赖分析；例如 `delivery-dist`、`packaging/*dist`。该规则只影响依赖解析与 JAR 导入，不影响 Maven reactor 构建。可用 `--exclude-project` 增加规则，例如 `--exclude-project 'packaging/*'`；添加 `--no-default-project-excludes` 可关闭默认规则。清单会记录 `projects_analyzed` 与 `projects_excluded`。
+除了显式排除规则外，`packaging=pom` 与带 `<modules>` 的普通 aggregator 不执行依赖解析；workspace 内 parent 链只解析最高本地边界。例如 `prod-parent -> ap-out-parent -> ap-parent -> external parent` 时，`prod-parent`、`ap-out-parent` 是中间 parent，会被跳过，只解析 `ap-parent`，避免同一条 parent 链重复解析传递依赖。项目级规则始终生效；默认跳过 artifactId 或项目路径匹配 `*dist` 的项目依赖分析；例如 `delivery-dist`、`packaging/*dist`。该规则只影响依赖解析与 JAR 导入，不影响 Maven reactor 构建。可用 `--exclude-project` 增加规则，例如 `--exclude-project 'packaging/*'`；添加 `--no-default-project-excludes` 可关闭默认规则。清单会记录 `projects_analyzed` 与 `projects_excluded`。
 
 #### 混合 JDK workspace
 

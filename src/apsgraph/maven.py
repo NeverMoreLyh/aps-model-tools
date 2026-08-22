@@ -52,6 +52,7 @@ class MavenProject:
     modules: Tuple[str, ...] = ()
     packaging: str = "jar"
     parent_artifact_id: str = ""
+    parent_group_id: str = ""
 
 
 @dataclass
@@ -346,6 +347,7 @@ def _pom_project(pom: Path) -> MavenProject:
         tuple(dict.fromkeys(modules)),
         (root.findtext(tag("packaging"), default="jar").strip() or "jar").lower(),
         parent_artifact,
+        parent_group,
     )
 
 
@@ -516,6 +518,16 @@ def _project_coordinate(project: MavenProject) -> str:
     return (
         f"{project.group_id}:{project.artifact_id}"
         if project.group_id else f":{project.artifact_id}"
+    )
+
+
+def _parent_coordinate(project: MavenProject) -> Optional[str]:
+    """Return a parent coordinate when this lightweight parser can identify one."""
+    if not project.parent_artifact_id:
+        return None
+    return (
+        f"{project.parent_group_id}:{project.parent_artifact_id}"
+        if project.parent_group_id else f":{project.parent_artifact_id}"
     )
 
 
@@ -974,27 +986,34 @@ def _selected_projects(
 def _dependency_analysis_projects(
     projects: Sequence[MavenProject],
 ) -> Tuple[List[MavenProject], List[str]]:
-    """Keep runtime modules and skip workspace structural parent/aggregator POMs.
+    """Select runtime modules plus the top boundary of workspace parent chains.
 
-    ``dependency:list`` on an aggregator duplicates the transitive closure of
-    every child and can run for several minutes without adding a coordinate.
-    Child modules already resolve their own dependencies, so packaging POMs,
-    reactors with modules, and POMs referenced as a workspace parent are not
-    analyzed.
+    ``dependency:list`` on every intermediate parent duplicates inherited
+    dependencies and can run for several minutes without adding a coordinate.
+    A referenced workspace parent whose own parent is also local is only an
+    intermediate link and is skipped.  The topmost local parent is analyzed so
+    dependencies introduced at the workspace/external-parent boundary remain
+    visible even when it has ``packaging=pom`` or aggregator modules.  Ordinary
+    packaging/aggregator POMs that are not parent-chain boundaries are skipped.
     """
+    project_coordinates = {_project_coordinate(project) for project in projects}
     referenced_parents = {
-        project.parent_artifact_id for project in projects if project.parent_artifact_id
+        coordinate for coordinate in map(_parent_coordinate, projects)
+        if coordinate is not None
     }
     selected: List[MavenProject] = []
     excluded: List[str] = []
     for project in projects:
+        coordinate = _project_coordinate(project)
+        is_workspace_parent = coordinate in referenced_parents
+        has_workspace_parent = _parent_coordinate(project) in project_coordinates
         reason = ""
-        if project.packaging == "pom":
+        if is_workspace_parent and has_workspace_parent:
+            reason = "intermediate workspace parent"
+        elif not is_workspace_parent and project.packaging == "pom":
             reason = "packaging=pom"
-        elif project.modules:
+        elif not is_workspace_parent and project.modules:
             reason = "Maven aggregator with modules"
-        elif project.artifact_id in referenced_parents:
-            reason = "workspace parent project"
         if reason:
             excluded.append(
                 f"{project.artifact_id} ({project.path}); reason: {reason}"

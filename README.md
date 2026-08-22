@@ -32,6 +32,12 @@ apsgraph status
 apsgraph stats
 ```
 
+Use `apsgraph --version` for the installed version. To inspect that version's default options and the effective rules in `.apsgraph.json`:
+
+```bash
+apsgraph options
+```
+
 ## Maven dependencies and framework JAR models
 
 `apsgraph scan` and `apsgraph sync` only read workspace XML and never invoke Maven. To build the workspace, copy resolved runtime dependencies, and combine their framework XML with workspace XML:

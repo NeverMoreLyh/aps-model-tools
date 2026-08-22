@@ -1,6 +1,6 @@
 # APSGraph 使用说明
 
-> 版本：0.5.0
+> 版本：0.6.0
 > 更新时间：2026-08-23
 > 项目地址：https://github.com/NeverMoreLyh/aps-model-tools
 
@@ -59,6 +59,7 @@ apsgraph --help
 | `scan` | 全量扫描工作空间，构建/重建 SQLite V2 索引 |
 | `scan --include-deps` | 编译 Maven workspace，导入依赖 JAR 模型后原子发布索引 |
 | `sync` | 增量同步源码变更到已有索引 |
+| `options` | 查看当前版本、默认参数与 workspace 生效规则 |
 | `status` | 查看工作空间与索引的同步状态 |
 | `import-maven-deps` | 解析 Maven 依赖并替换已有索引中的 JAR 导入模型 |
 | `import-jars` | 手工从指定 Maven 依赖 JAR 导入框架基础模型 |
@@ -75,6 +76,22 @@ apsgraph --help
 ---
 
 ## 5. 命令详细说明
+
+### 5.0 options — 查看版本与参数默认值
+
+```bash
+apsgraph --version
+apsgraph options
+apsgraph options --workspace /path/to/workspace
+```
+
+`--version` 输出当前安装版本。`options` 是只读命令，输出 JSON，包含：
+
+1. 当前 `version`；
+2. 当前版本内置默认值：workspace、数据库、缓存目录、Maven goal、测试跳过、依赖 scope、Maven 可执行文件、并行数和默认排除规则；
+3. 指定 workspace 的生效排除规则与 JDK 策略。
+
+该命令不会创建索引或缓存目录。完整命令行参数仍可通过 `apsgraph --help` 或 `apsgraph COMMAND --help` 查看。
 
 ### 5.1 scan — 全量扫描构建索引
 

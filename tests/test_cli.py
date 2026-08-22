@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest import mock
 
 import apsgraph.cli as cli_module
+from apsgraph import __version__
 from apsgraph.cli import main
 from apsgraph.store import connect
 
@@ -44,6 +45,58 @@ class CliTest(unittest.TestCase):
 
         self.assertEqual(2, rc)
         self.assertEqual({"error": str(error)}, json.loads(output.getvalue()))
+
+    def test_version_uses_package_version(self):
+        output = io.StringIO()
+        with self.assertRaises(SystemExit) as exit_context, \
+                contextlib.redirect_stdout(output):
+            main(["--version"])
+
+        self.assertEqual(0, exit_context.exception.code)
+        self.assertEqual(f"apsgraph {__version__}\n", output.getvalue())
+
+    def test_options_show_defaults_and_effective_workspace_rules(self):
+        workspace = Path(self.tmp.name) / "configured"
+        workspace.mkdir()
+        (workspace / ".apsgraph.json").write_text(json.dumps({
+            "excludeProjects": ["legacy/*"],
+            "maven": {
+                "jdk": {
+                    "default": "8",
+                    "javaHomes": {"8": "/opt/jdk8"},
+                    "rules": [{"match": ["modern/*"], "jdk": "17"}],
+                }
+            },
+        }), encoding="utf-8")
+        output = io.StringIO()
+
+        with contextlib.redirect_stdout(output):
+            rc = main(["options", "--workspace", str(workspace)])
+
+        self.assertEqual(0, rc)
+        report = json.loads(output.getvalue())
+        self.assertEqual(__version__, report["version"])
+        self.assertEqual(str(workspace.resolve()), report["workspace"])
+        self.assertEqual({
+            "workspace": ".",
+            "database": ".apsgraph/apsgraph.db",
+            "cache_dir": ".apsgraph",
+            "maven": {
+                "goal": ["install"],
+                "skip_tests": True,
+                "dependency_scope": "runtime",
+                "executable": "mvn",
+                "jobs": 4,
+                "default_excluded_projects": ["*dist"],
+            },
+        }, report["defaults"])
+        self.assertEqual(["legacy/*", "*dist"], report["effective"]["exclude_projects"])
+        self.assertEqual("8", report["effective"]["maven_jdk"]["default"])
+        self.assertEqual("/opt/jdk8", report["effective"]["maven_jdk"]["java_homes"]["8"])
+        self.assertEqual(
+            {"match": ["modern/*"], "jdk": "17"},
+            report["effective"]["maven_jdk"]["rules"][0],
+        )
 
     def test_scan_uses_workspace_and_database_defaults(self):
         workspace = Path(self.tmp.name) / "workspace" / "repo"

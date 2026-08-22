@@ -8,6 +8,7 @@ from dataclasses import replace as replace_dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
+from . import __version__
 from .bridge import build_bridge_report
 from .classification import audit_capabilities, render_markdown
 from .ddl import generate_table_ddl
@@ -56,6 +57,22 @@ def _positive_depth(value: str) -> int:
 
 DEFAULT_DB = Path(".apsgraph/apsgraph.db")
 DEFAULT_WORKSPACE = Path(".")
+DEFAULT_CACHE_DIR = Path(".apsgraph")
+DEFAULT_MAVEN_JOBS = 4
+
+DEFAULT_OPTIONS = {
+    "workspace": str(DEFAULT_WORKSPACE),
+    "database": str(DEFAULT_DB),
+    "cache_dir": str(DEFAULT_CACHE_DIR),
+    "maven": {
+        "goal": ["install"],
+        "skip_tests": True,
+        "dependency_scope": "runtime",
+        "executable": "mvn",
+        "jobs": DEFAULT_MAVEN_JOBS,
+        "default_excluded_projects": list(DEFAULT_EXCLUDED_PROJECTS),
+    },
+}
 
 
 def _project_excludes(args: argparse.Namespace) -> List[str]:
@@ -141,7 +158,11 @@ def _progress(message: str) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="apsgraph", description="Read-only APS metadata graph tools")
+    parser = argparse.ArgumentParser(
+        prog="apsgraph",
+        description="Read-only APS metadata graph tools",
+    )
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
 
     scan = sub.add_parser("scan")
@@ -161,9 +182,9 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument("--deps-scope", choices=["compile", "runtime", "test"], default="runtime",
                       help="dependency scope to copy and import (default: runtime)")
     scan.add_argument("--maven", default="mvn", help="Maven executable (default: mvn)")
-    scan.add_argument("--cache-dir", type=Path, default=Path(".apsgraph"),
+    scan.add_argument("--cache-dir", type=Path, default=DEFAULT_CACHE_DIR,
                       help="workspace-relative cache directory (default: .apsgraph)")
-    scan.add_argument("--jobs", type=_positive_int, default=4, metavar="N",
+    scan.add_argument("--jobs", type=_positive_int, default=DEFAULT_MAVEN_JOBS, metavar="N",
                       help="parallel Maven jobs inside build/dependency phases (default: 4)")
     scan.add_argument("--exclude-project", action="append", default=[], metavar="PATTERN",
                       help="skip dependency analysis for a project glob; repeatable "
@@ -171,6 +192,13 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument("--no-default-project-excludes", action="store_true",
                       help="disable the default '*dist' dependency-analysis exclusion")
     _add_maven_jdk_arguments(scan)
+
+    options = sub.add_parser(
+        "options",
+        help="show the current APSGraph version, default options, and effective workspace rules",
+    )
+    options.add_argument("--workspace", type=Path, default=DEFAULT_WORKSPACE,
+                         help="workspace used to resolve effective rules (default: current directory)")
 
     sync = sub.add_parser("sync")
     sync.add_argument("--workspace", type=Path, default=DEFAULT_WORKSPACE,
@@ -204,9 +232,9 @@ def build_parser() -> argparse.ArgumentParser:
     importdeps.add_argument("--deps-scope", choices=["compile", "runtime", "test"], default="runtime",
                             help="dependency scope to copy and import (default: runtime)")
     importdeps.add_argument("--maven", default="mvn", help="Maven executable (default: mvn)")
-    importdeps.add_argument("--cache-dir", type=Path, default=Path(".apsgraph"),
+    importdeps.add_argument("--cache-dir", type=Path, default=DEFAULT_CACHE_DIR,
                             help="workspace-relative cache directory (default: .apsgraph)")
-    importdeps.add_argument("--jobs", type=_positive_int, default=4, metavar="N",
+    importdeps.add_argument("--jobs", type=_positive_int, default=DEFAULT_MAVEN_JOBS, metavar="N",
                             help="parallel Maven jobs inside build/dependency phases (default: 4)")
     importdeps.add_argument("--exclude-project", action="append", default=[], metavar="PATTERN",
                             help="skip dependency analysis for a project glob; repeatable "
@@ -328,6 +356,33 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _options_report(workspace: Path) -> Dict[str, Any]:
+    """Return immutable CLI defaults plus rules effective for this workspace.
+
+    This command is intentionally read-only: it never creates the workspace,
+    cache, or index.  It gives scripts a stable way to inspect defaults because
+    those defaults may change between APSGraph releases.
+    """
+    scan_args = build_parser().parse_args([
+        "scan", "--include-deps", "--workspace", str(workspace)
+    ])
+    effective_excludes = _project_excludes(scan_args)
+    jdk_config = load_maven_jdk_config(workspace)
+    return {
+        "version": __version__,
+        "workspace": str(Path(workspace).resolve()),
+        "defaults": DEFAULT_OPTIONS,
+        "effective": {
+            "exclude_projects": effective_excludes,
+            "maven_jdk": {
+                "default": jdk_config.default_profile,
+                "java_homes": dict(jdk_config.java_homes),
+                "rules": [asdict(rule) for rule in jdk_config.rules],
+            },
+        },
+    }
+
+
 def _parse_codegraph_databases(values: List[str]) -> Dict[str, Path]:
     result: Dict[str, Path] = {}
     for value in values:
@@ -366,6 +421,9 @@ def main(argv: Optional[List[str]] = None) -> int:
             else:
                 summary = scan_workspace(args.workspace, args.db, args.fail_on_parse_error)
                 _json(asdict(summary))
+            return 0
+        if args.command == "options":
+            _json(_options_report(args.workspace))
             return 0
         if args.command == "sync":
             summary = sync_workspace(args.workspace, args.db, args.fail_on_parse_error)

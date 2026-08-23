@@ -1,6 +1,6 @@
 # APSGraph 使用说明
 
-> 版本：0.8.0
+> 版本：0.9.0
 > 更新时间：2026-08-23
 > 项目地址：https://github.com/NeverMoreLyh/aps-model-tools
 
@@ -105,6 +105,8 @@ apsgraph scan
 | `--db` | SQLite 索引输出路径（默认 `.apsgraph/apsgraph.db`） |
 | `--fail-on-parse-error` | 遇到解析错误时立即终止（默认跳过并记录） |
 | `--include-deps` | 先执行 Maven workspace 构建，再导入依赖 JAR 模型 |
+| `--deps-mode` | `full`（默认）完整 workspace；`framework` 只处理最高本地 parent 边界 |
+| `--external-db` | 合并依赖源码仓库生成的 APS SQLite 索引，可重复；不能与 `--include-deps` 同用 |
 | `--maven-goal` | Maven goal，可重复；默认 `install` |
 | `--skip-tests` / `--no-skip-tests` | 默认追加 `-DskipTests`，可改为执行测试 |
 | `--deps-scope` | 依赖范围：`compile` / `runtime` / `test`，默认 `runtime` |
@@ -118,7 +120,7 @@ apsgraph scan
 | `--project-jdk` | 项目/reactor glob 的 JDK profile 覆盖，格式 `PROJECT=PROFILE`，可重复 |
 | `--java-home` | profile 的显式 `JAVA_HOME`，格式 `PROFILE=PATH`，可重复 |
 
-普通 `scan` 不要求 Maven。`scan --include-deps` 的流程为：发现全部 `pom.xml`（排除 `target` 等目录）→ 识别 Maven aggregator/reactor 根项目并按 workspace 内依赖关系拓扑排序 → 按依赖约束执行默认 `mvn -B -DskipTests install`（有依赖关系的 reactor 保持先后顺序，独立 reactor 可由 `--jobs` 并行）→ 全部构建成功后并行执行各运行模块的 `dependency:list` 与 `dependency:copy-dependencies` → 检查依赖 POM 的业务模块标记并过滤 JAR → 扫描 workspace XML 并导入业务依赖 JAR XML → 原子替换最终索引。任一 Maven 项目失败、同一 `groupId:artifactId` 解析出多个版本、或依赖 XML 解析失败时立即退出，不替换已有索引。
+普通 `scan` 不要求 Maven；未解析引用不会导致失败，JSON 的 `unresolved_models` 会列出缺失模型名，CLI 同时在 stderr 输出 warning。四种典型场景为：`scan --include-deps` 完整构建并解析全部依赖；`scan --include-deps --deps-mode framework` 只构建/解析最高本地 parent 边界；`scan --external-db DB` 复用依赖源码索引；普通 `scan` 只处理 workspace XML。`scan --include-deps` 的流程为：发现全部 `pom.xml`（排除 `target` 等目录）→ 识别 Maven aggregator/reactor 根项目并按 workspace 内依赖关系拓扑排序 → 按依赖约束执行默认 `mvn -B -DskipTests install`（有依赖关系的 reactor 保持先后顺序，独立 reactor 可由 `--jobs` 并行）→ 全部构建成功后并行执行各运行模块的 `dependency:list` 与 `dependency:copy-dependencies` → 检查依赖 POM 的业务模块标记并过滤 JAR → 扫描 workspace XML 并导入业务依赖 JAR XML → 原子替换最终索引。任一 Maven 项目失败、同一 `groupId:artifactId` 解析出多个版本、或依赖 XML 解析失败时立即退出，不替换已有索引。
 
 进度日志输出到 stderr，最终 JSON 仍输出到 stdout，便于管道处理。关键阶段包括项目发现、workspace 构建、每个 reactor 构建、依赖解析、版本冲突检查、workspace XML 扫描、JAR 模型导入和原子发布。
 
@@ -145,11 +147,59 @@ apsgraph status
 
 ### 5.4 Maven 依赖与 JAR 模型
 
-一步完成构建、依赖复制和索引重建：
+### 5.5 四种依赖使用场景
+
+**场景 1：最完整索引**
 
 ```bash
 apsgraph scan --include-deps
 ```
+
+构建全部 Maven workspace，解析业务依赖 JAR，并导入其中的业务模型 XML，适合 APSGraph 与 CodeGraph 做最完整的桥接。
+
+**场景 2：只获取依赖 JAR XML**
+
+```bash
+apsgraph scan --include-deps --deps-mode framework
+```
+
+只构建最高本地 parent 边界（例如 `prod-parent -> ap-out-parent -> ap-parent -> external parent` 中的 `ap-parent`），Maven 使用 `-N` 非递归执行，不为了生成所有模块的 `target/gen` 类而完整编译 workspace。依赖解析也只针对该 parent 边界，随后仍按 `edsp-module` / `aps-module` 业务标记过滤 JAR。
+
+**场景 3：复用依赖项目源码索引**
+
+先在依赖项目执行：
+
+```bash
+cd /path/to/dependency-workspace
+apsgraph scan
+```
+
+再在业务 workspace 合并其 SQLite 索引：
+
+```bash
+apsgraph scan --external-db /path/to/dependency-workspace/.apsgraph/apsgraph.db
+```
+
+也可在业务 workspace 的 `.apsgraph.json` 固化路径：
+
+```json
+{
+  "externalIndexes": [
+    "/path/to/dependency-workspace/.apsgraph/apsgraph.db"
+  ]
+}
+```
+
+外部索引中的模型使用 `external-db:<数据库>!<模型文件>` 逻辑路径；workspace 同名 `full_id` 优先，本地 XML 可引用外部模型，`sync` 不会删除这些外部模型。
+
+**场景 4：只索引 workspace XML**
+
+```bash
+apsgraph scan
+```
+
+不调用 Maven、不导入依赖 JAR。如果引用了不存在的模型，扫描不会失败；JSON 返回 `unresolved` 数量和 `unresolved_models` 名称列表，并在 stderr 输出 warning。
+
 
 默认参数等价于 `--maven-goal install --skip-tests --deps-scope runtime --db .apsgraph/apsgraph.db --jobs 4`，所有参数均可显式覆盖。构建日志位于 `.apsgraph/logs/maven/`，依赖解析日志位于 `.apsgraph/logs/maven-dependencies/`，依赖清单位于 `.apsgraph/dependency-manifest.json`。可在 workspace 根目录维护 `.apsgraph.json`：
 

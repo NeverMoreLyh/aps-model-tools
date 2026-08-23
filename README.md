@@ -40,11 +40,23 @@ apsgraph options
 
 ## Maven dependencies and framework JAR models
 
-`apsgraph scan` and `apsgraph sync` only read workspace XML and never invoke Maven. To build the workspace, copy resolved runtime dependencies, and combine their framework XML with workspace XML:
+APSGraph supports four scan scenarios:
 
 ```bash
+# 1. Complete workspace build + Maven dependency/JAR model import
 apsgraph scan --include-deps
+
+# 2. Import framework dependency JAR XML without building every module
+apsgraph scan --include-deps --deps-mode framework
+
+# 3. Reuse an APS SQLite index built from dependency source code
+apsgraph scan --external-db /path/to/dependency/.apsgraph/apsgraph.db
+
+# 4. Workspace XML only; unresolved references remain warnings
+apsgraph scan
 ```
+
+`apsgraph sync` only reads workspace XML and never invokes Maven. Framework mode builds only top local parent boundaries (for example `ap-parent`) with Maven `-N`; it resolves dependency JARs from that boundary instead of generating every module under `target/gen`. External-index mode merges dependency nodes into the workspace index, lets local references resolve against them, and retains those logical files during sync. Plain scan reports distinct unresolved model names in JSON and stderr warnings.
 
 Defaults are configurable:
 

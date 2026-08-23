@@ -590,6 +590,47 @@ class MavenWorkspaceTest(unittest.TestCase):
         )
         self.assertEqual(6, sum(any("dependency:" in value for value in command) for command in runner.commands))
 
+    def test_framework_mode_builds_and_resolves_only_parent_boundary(self):
+        isolated = self.root / "framework-mode"
+        write_pom(
+            isolated / "ap-parent/pom.xml", "ap-parent",
+            packaging="pom", parent_group="cn.external",
+            dependencies=[("cn.framework", "framework-model", "1.0.0", "compile")],
+        )
+        write_pom(
+            isolated / "prod-parent/pom.xml", "prod-parent",
+            parent="ap-parent", modules=("app",), packaging="pom",
+        )
+        write_pom(
+            isolated / "prod-parent/app/pom.xml", "app", parent="prod-parent",
+            dependencies=[("cn.other", "other", "1.0.0", "compile")],
+        )
+        projects = discover_maven_projects(isolated)
+        runner = FakeMaven(
+            dependencies={
+                "ap-parent": ["cn.framework:framework-model:jar:1.0.0:compile"],
+                "prod-parent": [],
+                "app": ["cn.other:other:jar:1.0.0:compile"],
+            },
+            jars={"cn.framework:framework-model:1.0.0": JAR_MODEL},
+        )
+
+        _, report = build_workspace(isolated, runner=runner, framework_only=True)
+        inventory = collect_dependencies(
+            isolated, projects, runner=runner, framework_only=True
+        )
+
+        self.assertEqual(["ap-parent"], [Path(value).name for value in report.build_order])
+        self.assertTrue(any(value == "-N" for value in report.commands[0]))
+        self.assertEqual(1, inventory.projects_analyzed)
+        self.assertEqual(
+            {"cn.framework:framework-model:1.0.0"},
+            {f"{item.group_id}:{item.artifact_id}:{item.version}" for item in inventory.dependencies},
+        )
+        self.assertFalse(
+            any("other" in value for command in runner.commands for value in command)
+        )
+
     def test_only_top_workspace_parent_boundary_is_dependency_analyzed(self):
         isolated = self.root / "parent-chain"
         write_pom(

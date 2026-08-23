@@ -88,7 +88,9 @@ class CliTest(unittest.TestCase):
                 "executable": "mvn",
                 "jobs": 4,
                 "default_excluded_projects": ["*dist"],
+                "deps_mode": "full",
             },
+            "external_indexes": [],
         }, report["defaults"])
         self.assertEqual(["legacy/*", "*dist"], report["effective"]["exclude_projects"])
         self.assertEqual("8", report["effective"]["maven_jdk"]["default"])

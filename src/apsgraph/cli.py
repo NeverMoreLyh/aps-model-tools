@@ -22,7 +22,13 @@ from .maven import (
     load_maven_jdk_config,
     scan_workspace_with_dependencies,
 )
-from .scanner import import_jar_models, scan_workspace, sync_workspace, workspace_status
+from .scanner import (
+    import_jar_models,
+    scan_workspace,
+    scan_workspace_with_external_indexes,
+    sync_workspace,
+    workspace_status,
+)
 from .store import connect, find_nodes, get_stats, references
 from .xlsx_export import ExcelExportReport, export_excel
 
@@ -71,7 +77,9 @@ DEFAULT_OPTIONS = {
         "executable": "mvn",
         "jobs": DEFAULT_MAVEN_JOBS,
         "default_excluded_projects": list(DEFAULT_EXCLUDED_PROJECTS),
+        "deps_mode": "full",
     },
+    "external_indexes": [],
 }
 
 
@@ -173,6 +181,10 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument("--fail-on-parse-error", action="store_true")
     scan.add_argument("--include-deps", action="store_true",
                       help="build Maven projects, copy resolved dependency jars, and include their model XML")
+    scan.add_argument("--deps-mode", choices=["full", "framework"], default="full",
+                      help="dependency scan mode: full builds the workspace (default); framework builds only top local parent boundaries")
+    scan.add_argument("--external-db", action="append", type=Path, default=[], metavar="DB",
+                      help="merge an APS SQLite index produced from dependency source; repeatable; incompatible with --include-deps")
     scan.add_argument("--maven-goal", action="append", default=None, metavar="GOAL",
                       help="Maven goal (default: install); repeatable")
     scan.add_argument("--skip-tests", dest="skip_tests", action="store_true", default=True,
@@ -231,6 +243,8 @@ def build_parser() -> argparse.ArgumentParser:
                             help="run tests during Maven builds")
     importdeps.add_argument("--deps-scope", choices=["compile", "runtime", "test"], default="runtime",
                             help="dependency scope to copy and import (default: runtime)")
+    importdeps.add_argument("--deps-mode", choices=["full", "framework"], default="full",
+                            help="dependency scan mode: full resolves workspace modules (default); framework resolves only top local parent boundaries")
     importdeps.add_argument("--maven", default="mvn", help="Maven executable (default: mvn)")
     importdeps.add_argument("--cache-dir", type=Path, default=DEFAULT_CACHE_DIR,
                             help="workspace-relative cache directory (default: .apsgraph)")
@@ -356,6 +370,29 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _external_indexes(args: argparse.Namespace) -> List[Path]:
+    """Combine workspace external-index rules with command-line overrides."""
+    configured: List[str] = []
+    config_path = args.workspace / ".apsgraph.json"
+    if config_path.is_file():
+        try:
+            payload = json.loads(config_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"invalid {config_path}: {exc}") from exc
+        if not isinstance(payload, dict):
+            raise ValueError(f"{config_path} must contain a JSON object")
+        value = payload.get("externalIndexes", [])
+        if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+            raise ValueError(
+                f"{config_path} field 'externalIndexes' must be an array of strings"
+            )
+        configured = value
+
+    result = [args.workspace / item for item in configured]
+    result.extend(args.external_db)
+    return list(dict.fromkeys(result))
+
+
 def _options_report(workspace: Path) -> Dict[str, Any]:
     """Return immutable CLI defaults plus rules effective for this workspace.
 
@@ -367,12 +404,14 @@ def _options_report(workspace: Path) -> Dict[str, Any]:
         "scan", "--include-deps", "--workspace", str(workspace)
     ])
     effective_excludes = _project_excludes(scan_args)
+    external_indexes = _external_indexes(scan_args)
     jdk_config = load_maven_jdk_config(workspace)
     return {
         "version": __version__,
         "workspace": str(Path(workspace).resolve()),
         "defaults": DEFAULT_OPTIONS,
         "effective": {
+            "external_indexes": [str(value.resolve()) for value in external_indexes],
             "exclude_projects": effective_excludes,
             "maven_jdk": {
                 "default": jdk_config.default_profile,
@@ -399,6 +438,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         if args.command == "scan":
+            external_indexes = _external_indexes(args)
+            if args.include_deps and external_indexes:
+                raise ValueError("--include-deps and --external-db are mutually exclusive")
             if args.include_deps:
                 jdk_config, jdk_profile, project_jdk = _jdk_options(args)
                 result = scan_workspace_with_dependencies(
@@ -416,10 +458,18 @@ def main(argv: Optional[List[str]] = None) -> int:
                     project_jdk=project_jdk,
                     progress=_progress,
                     jobs=args.jobs,
+                    framework_only=args.deps_mode == "framework",
                 )
                 _json(asdict(result))
+            elif external_indexes:
+                summary, external = scan_workspace_with_external_indexes(
+                    args.workspace, args.db, external_indexes, args.fail_on_parse_error
+                )
+                _json({"scan": asdict(summary), "external": external})
             else:
                 summary = scan_workspace(args.workspace, args.db, args.fail_on_parse_error)
+                for target in summary.unresolved_models:
+                    _progress(f"warning: unresolved model reference: {target}")
                 _json(asdict(summary))
             return 0
         if args.command == "options":
@@ -472,6 +522,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 project_jdk=project_jdk,
                 progress=_progress,
                 jobs=args.jobs,
+                framework_only=args.deps_mode == "framework",
             )
             _json(result)
             return 0

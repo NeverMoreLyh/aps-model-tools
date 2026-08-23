@@ -56,6 +56,7 @@ class ScanSummary:
     nodes: int
     edges: int
     unresolved: int
+    unresolved_models: List[str]
 
 
 @dataclass(frozen=True)
@@ -277,6 +278,134 @@ def import_jar_models(db_path: Path | str, jars: List[Path | str],
     }
 
 
+def _external_logical_path(source_db: Path, model_path: str) -> str:
+    return f"external-db:{source_db}!/{model_path}"
+
+
+def import_external_indexes(
+    db_path: Path | str,
+    external_indexes: List[Path | str],
+    reresolve: bool = True,
+) -> Dict[str, object]:
+    """Merge model nodes from dependency APS indexes into a workspace index.
+
+    Workspace definitions win when both indexes expose the same ``full_id``.
+    Imported files use ``external-db:<db>!<model>`` logical paths and therefore
+    remain stable during workspace sync.  Reference edges are re-resolved after
+    the merge, allowing local workspace XML to reference dependency models.
+    """
+    target = Path(db_path).resolve()
+    conn = connect(target)
+    imported_files = 0
+    imported_nodes = 0
+    imported_edges = 0
+    duplicated_nodes = 0
+    per_index: Dict[str, Dict[str, int]] = {}
+    try:
+        with conn:
+            for raw_index in external_indexes:
+                source_path = Path(raw_index).resolve()
+                if source_path == target:
+                    raise ValueError(f"external index cannot be the target index: {source_path}")
+                if not source_path.is_file():
+                    raise FileNotFoundError(f"external index does not exist: {source_path}")
+                source = connect(source_path, read_only=True)
+                counts = {"files": 0, "nodes": 0, "edges": 0, "duplicated_nodes": 0}
+                try:
+                    file_map: Dict[int, int] = {}
+                    for row in source.execute(
+                        "select id,path,suffix,content_hash,parse_status,root_name,model_id,package_name,error_message from model_files order by id"
+                    ):
+                        logical = _external_logical_path(source_path, row["path"])
+                        cursor = conn.execute(
+                            """delete from model_files where path=?""",
+                            (logical,),
+                        )
+                        cursor = conn.execute(
+                            """insert into model_files
+                            (path,suffix,content_hash,parse_status,root_name,model_id,package_name,error_message)
+                            values(?,?,?,?,?,?,?,?)""",
+                            (logical, row["suffix"], row["content_hash"], row["parse_status"],
+                             row["root_name"], row["model_id"], row["package_name"], row["error_message"]),
+                        )
+                        file_map[row["id"]] = cursor.lastrowid
+                        imported_files += 1
+                        counts["files"] += 1
+
+                    node_map: Dict[int, int] = {}
+                    full_id_map: Dict[str, int] = {
+                        row[0]: row[1] for row in conn.execute(
+                            "select full_id,id from nodes where full_id is not null and full_id!=''"
+                        )
+                    }
+                    for row in source.execute(
+                        "select id,stable_id,kind,raw_id,full_id,owner_node_id,file_id,xml_tag,properties_json from nodes order by id"
+                    ):
+                        existing = full_id_map.get(row["full_id"]) if row["full_id"] else None
+                        if existing is not None:
+                            node_map[row["id"]] = existing
+                            duplicated_nodes += 1
+                            counts["duplicated_nodes"] += 1
+                            continue
+                        cursor = conn.execute(
+                            """insert into nodes
+                            (stable_id,kind,raw_id,full_id,owner_node_id,file_id,xml_tag,properties_json)
+                            values(?,?,?,?,?,?,?,?)""",
+                            (f"{row['stable_id']}@{source_path}", row["kind"], row["raw_id"],
+                             row["full_id"], node_map.get(row["owner_node_id"]),
+                             file_map.get(row["file_id"]), row["xml_tag"], row["properties_json"]),
+                        )
+                        node_map[row["id"]] = cursor.lastrowid
+                        if row["full_id"]:
+                            full_id_map[row["full_id"]] = cursor.lastrowid
+                        imported_nodes += 1
+                        counts["nodes"] += 1
+
+                    source_nodes = {
+                        row[0]: row for row in source.execute(
+                            "select id,full_id from nodes order by id"
+                        )
+                    }
+                    for row in source.execute(
+                        "select id,from_node_id,to_node_id,raw_target,relation_kind,evidence_file_id,evidence_value,confidence from edges order by id"
+                    ):
+                        from_id = node_map.get(row["from_node_id"])
+                        if from_id is None:
+                            continue
+                        raw_target = row["raw_target"]
+                        if raw_target is None and row["to_node_id"] is not None:
+                            raw_target = source_nodes[row["to_node_id"]]["full_id"] or None
+                        conn.execute(
+                            """insert into edges
+                            (from_node_id,to_node_id,raw_target,relation_kind,evidence_file_id,evidence_value,confidence)
+                            values(?,?,?,?,?,?,?)""",
+                            (from_id, node_map.get(row["to_node_id"]), raw_target,
+                             row["relation_kind"], file_map.get(row["evidence_file_id"]),
+                             row["evidence_value"], row["confidence"]),
+                        )
+                        imported_edges += 1
+                        counts["edges"] += 1
+                finally:
+                    source.close()
+                per_index[str(source_path)] = counts
+            if reresolve:
+                _resolve_edges(conn)
+        stats = get_stats(conn)
+    finally:
+        conn.close()
+    return {
+        "external_indexes": len(external_indexes),
+        "imported_files": imported_files,
+        "imported_nodes": imported_nodes,
+        "imported_edges": imported_edges,
+        "duplicated_nodes": duplicated_nodes,
+        "per_index": per_index,
+        "nodes": stats["nodes"],
+        "edges": stats["edges"],
+        "unresolved": stats["unresolved"],
+    }
+
+
 def _resolve_edges(conn: sqlite3.Connection) -> None:
     conn.execute("update edges set to_node_id=null where raw_target is not null")
     conn.execute("""update edges set to_node_id=(
@@ -292,7 +421,17 @@ def _validate_workspace(root: Path) -> None:
 
 def _summary(conn: sqlite3.Connection, discovered: int) -> ScanSummary:
     stats = get_stats(conn)
-    return ScanSummary(discovered, stats["parsed"], stats["parse_failed"], stats["nodes"], stats["edges"], stats["unresolved"])
+    unresolved_models = [
+        row[0] for row in conn.execute(
+            """select distinct raw_target from edges
+               where to_node_id is null and raw_target is not null
+               order by raw_target"""
+        )
+    ]
+    return ScanSummary(
+        discovered, stats["parsed"], stats["parse_failed"], stats["nodes"],
+        stats["edges"], stats["unresolved"], unresolved_models,
+    )
 
 
 def scan_workspace(workspace: Path | str, db_path: Path | str, fail_on_parse_error: bool = False) -> ScanSummary:
@@ -335,6 +474,33 @@ def scan_workspace(workspace: Path | str, db_path: Path | str, fail_on_parse_err
     return summary
 
 
+def scan_workspace_with_external_indexes(
+    workspace: Path | str,
+    db_path: Path | str,
+    external_indexes: List[Path | str],
+    fail_on_parse_error: bool = False,
+) -> Tuple[ScanSummary, Dict[str, object]]:
+    """Scan workspace XML, merge dependency indexes, then publish atomically."""
+    root = Path(workspace).resolve()
+    _validate_workspace(root)
+    target = Path(db_path).resolve()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp_name = tempfile.mkstemp(
+        prefix=target.name + ".", suffix=".external.tmp", dir=str(target.parent)
+    )
+    os.close(fd)
+    staging = Path(temp_name)
+    staging.unlink()
+    try:
+        summary = scan_workspace(root, staging, fail_on_parse_error=fail_on_parse_error)
+        result = import_external_indexes(staging, external_indexes)
+        os.replace(staging, target)
+        return summary, result
+    finally:
+        if staging.exists():
+            staging.unlink()
+
+
 def _change_set(root: Path, conn: sqlite3.Connection):
     discovered = {path.relative_to(root).as_posix(): (path, suffix, _hash(path))
                   for path, suffix in discover_model_files(root)}
@@ -342,7 +508,7 @@ def _change_set(root: Path, conn: sqlite3.Connection):
     # never workspace files; they must not participate in workspace diffing.
     existing = {row["path"]: bytes(row["content_hash"])
                 for row in conn.execute("select path,content_hash from model_files")
-                if not row["path"].startswith("jar:")}
+                if not row["path"].startswith(("jar:", "external-db:"))}
     if not discovered and not existing:
         raise ValueError(f"workspace contains no recognized APS model files: {root}")
     added = sorted(set(discovered) - set(existing))

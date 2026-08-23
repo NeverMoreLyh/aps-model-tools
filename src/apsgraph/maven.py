@@ -748,6 +748,80 @@ def resolve_jdk_selections(
         selections[resolved_unit] = MavenJdkSelection(profile, java_home)
     return selections
 
+def _build_workspace_parent_boundaries(
+    workspace: Path,
+    projects: Sequence[MavenProject],
+    goals: Sequence[str] = ("install",),
+    skip_tests: bool = True,
+    maven: str = "mvn",
+    cache_dir: Path | str = ".apsgraph",
+    runner: CommandRunner = default_runner,
+    jdk_config: Optional[MavenJdkConfig] = None,
+    jdk_profile: Optional[str] = None,
+    project_jdk: Optional[Mapping[str, str]] = None,
+    progress: Optional[ProgressCallback] = None,
+) -> MavenBuildReport:
+    """Install only the top local parent POM boundary in framework mode.
+
+    ``-N`` keeps Maven from recursively building every module under an
+    aggregator boundary.  This is sufficient for resolving framework JARs and
+    avoids generating all ``target/gen`` classes in the business workspace.
+    """
+    root = workspace.resolve()
+    boundaries = _workspace_parent_boundary_projects(projects)
+    if not boundaries:
+        raise MavenError(
+            "framework dependency mode requires a local parent whose own parent is external"
+        )
+    by_artifact: Dict[str, MavenProject] = {}
+    for project in boundaries:
+        by_artifact.setdefault(project.artifact_id, project)
+    ordered_projects = [
+        project for project in _topological_projects(list(projects))
+        if project.artifact_id in by_artifact and project.path == by_artifact[project.artifact_id].path
+    ]
+    selections = resolve_jdk_selections(
+        root, projects, [project.path for project in ordered_projects],
+        config=jdk_config, global_profile=jdk_profile,
+        project_profiles=project_jdk,
+    )
+    logs = _resolve_cache(root, cache_dir) / "logs" / "maven-framework"
+    report = MavenBuildReport(
+        projects=[str(project.path) for project in ordered_projects],
+        build_order=[], succeeded=[], failed=[], commands=[], logs=[], jdk_profiles=[],
+    )
+    for project in ordered_projects:
+        selection = selections[project.path.resolve()]
+        if progress:
+            progress(
+                f"framework boundary build {_relative(root, project.path)} using JDK {selection.summary()}"
+            )
+        command = [maven, "-B"]
+        if skip_tests:
+            command.append("-DskipTests")
+        command.append("-N")
+        command.extend(goals)
+        log = logs / f"{_project_slug(root, project.path)}.log"
+        result = _run_maven(
+            runner, project.path, command, log, selection=selection, workspace=root
+        )
+        if result.returncode != 0:
+            report.failed.append(str(project.path))
+            raise MavenError(
+                _failure_message(
+                    f"Maven framework boundary build failed for {project.path} "
+                    f"(exit {result.returncode}); log: {log}",
+                    log, result,
+                )
+            )
+        report.build_order.append(str(project.path))
+        report.succeeded.append(str(project.path))
+        report.commands.append(list(command))
+        report.logs.append(str(log))
+        report.jdk_profiles.append(selection.summary())
+    return report
+
+
 def build_workspace(
     workspace: Path | str,
     goals: Sequence[str] = ("install",),
@@ -760,6 +834,7 @@ def build_workspace(
     project_jdk: Optional[Mapping[str, str]] = None,
     progress: Optional[ProgressCallback] = None,
     jobs: int = 1,
+    framework_only: bool = False,
 ) -> Tuple[List[MavenProject], MavenBuildReport]:
     root = Path(workspace).resolve()
     normalized_goals = tuple(goals or ())
@@ -768,6 +843,13 @@ def build_workspace(
     if jobs < 1:
         raise MavenError("jobs must be >= 1")
     projects = _topological_projects(discover_maven_projects(root))
+    if framework_only:
+        return projects, _build_workspace_parent_boundaries(
+            root, projects, goals=normalized_goals, skip_tests=skip_tests,
+            maven=maven, cache_dir=cache_dir, runner=runner,
+            jdk_config=jdk_config, jdk_profile=jdk_profile,
+            project_jdk=project_jdk, progress=progress,
+        )
     build_units, unit_graph, _ = _build_unit_graph(projects)
     jdk_selections = resolve_jdk_selections(
         root, projects, build_units, config=jdk_config,
@@ -1062,8 +1144,24 @@ def _selected_projects(
     return selected, excluded
 
 
+def _workspace_parent_boundary_projects(
+    projects: Sequence[MavenProject],
+) -> List[MavenProject]:
+    project_coordinates = {_project_coordinate(project) for project in projects}
+    referenced_parents = {
+        coordinate for coordinate in map(_parent_coordinate, projects)
+        if coordinate is not None
+    }
+    return [
+        project for project in projects
+        if _project_coordinate(project) in referenced_parents
+        and _parent_coordinate(project) not in project_coordinates
+    ]
+
+
 def _dependency_analysis_projects(
     projects: Sequence[MavenProject],
+    framework_only: bool = False,
 ) -> Tuple[List[MavenProject], List[str]]:
     """Select runtime modules plus the top boundary of workspace parent chains.
 
@@ -1082,6 +1180,19 @@ def _dependency_analysis_projects(
     }
     selected: List[MavenProject] = []
     excluded: List[str] = []
+    if framework_only:
+        boundaries = {
+            _project_coordinate(project)
+            for project in _workspace_parent_boundary_projects(projects)
+        }
+        for project in projects:
+            if _project_coordinate(project) in boundaries:
+                selected.append(project)
+            else:
+                excluded.append(
+                    f"{project.artifact_id} ({project.path}); reason: framework mode analyzes only the top workspace parent boundary"
+                )
+        return selected, excluded
     for project in projects:
         coordinate = _project_coordinate(project)
         is_workspace_parent = coordinate in referenced_parents
@@ -1113,6 +1224,7 @@ def collect_dependencies(
     jdk_selections: Optional[Mapping[Path, MavenJdkSelection]] = None,
     progress: Optional[ProgressCallback] = None,
     jobs: int = 1,
+    framework_only: bool = False,
 ) -> DependencyInventory:
     root = Path(workspace).resolve()
     cache = _resolve_cache(root, cache_dir)
@@ -1129,7 +1241,7 @@ def collect_dependencies(
         root, projects, excluded_projects
     )
     analysis_projects, structural_excluded = _dependency_analysis_projects(
-        explicit_projects
+        explicit_projects, framework_only=framework_only
     )
     excluded_project_records.extend(structural_excluded)
     allowed_scopes = _selected_scopes(scope)
@@ -1429,6 +1541,7 @@ def scan_workspace_with_dependencies(
     project_jdk: Optional[Mapping[str, str]] = None,
     progress: Optional[ProgressCallback] = None,
     jobs: int = 1,
+    framework_only: bool = False,
 ) -> FullScanResult:
     root = Path(workspace).resolve()
     target = Path(db_path).resolve()
@@ -1441,7 +1554,7 @@ def scan_workspace_with_dependencies(
         root, goals=goals, skip_tests=skip_tests, maven=maven,
         cache_dir=cache_dir, runner=runner, jdk_config=jdk_config,
         jdk_profile=jdk_profile, project_jdk=project_jdk, progress=progress,
-        jobs=jobs,
+        jobs=jobs, framework_only=framework_only,
     )
     build_units = _build_units(projects)
     jdk_selections = resolve_jdk_selections(
@@ -1455,6 +1568,7 @@ def scan_workspace_with_dependencies(
         root, projects, scope=dependency_scope, maven=maven,
         cache_dir=cache_dir, excluded_projects=excluded_projects, runner=runner,
         jdk_selections=jdk_selections, progress=progress, jobs=jobs,
+        framework_only=framework_only,
     )
 
     fd, staging_name = tempfile.mkstemp(
@@ -1508,6 +1622,7 @@ def import_maven_dependencies(
     project_jdk: Optional[Mapping[str, str]] = None,
     progress: Optional[ProgressCallback] = None,
     jobs: int = 1,
+    framework_only: bool = False,
 ) -> Dict[str, object]:
     root = Path(workspace).resolve()
     target = Path(db_path).resolve()
@@ -1524,7 +1639,7 @@ def import_maven_dependencies(
             root, goals=goals, skip_tests=skip_tests, maven=maven,
             cache_dir=cache_dir, runner=runner, jdk_config=jdk_config,
             jdk_profile=jdk_profile, project_jdk=project_jdk, progress=progress,
-            jobs=jobs,
+            jobs=jobs, framework_only=framework_only,
         )
     else:
         projects = _topological_projects(discover_maven_projects(root))
@@ -1548,6 +1663,7 @@ def import_maven_dependencies(
         root, projects, scope=dependency_scope, maven=maven,
         cache_dir=cache_dir, excluded_projects=excluded_projects, runner=runner,
         jdk_selections=jdk_selections, progress=progress, jobs=jobs,
+        framework_only=framework_only,
     )
 
     fd, staging_name = tempfile.mkstemp(

@@ -1,6 +1,6 @@
 # APSGraph 功能支持清单
 
-> 版本：0.8.0
+> 版本：0.9.0
 > 更新时间：2026-08-23
 
 ---
@@ -21,6 +21,9 @@
 | Maven workspace 构建 | ✅ | `scan --include-deps` 识别 aggregator 根目录并按依赖拓扑执行默认 `install -DskipTests`，独立 reactor 可通过 `--jobs` 并行 |
 | Maven JDK profile | ✅ | workspace 级 JDK 8/17 规则、CLI 覆盖、`JAVA_HOME` 注入与冲突阻断 |
 | 依赖模型一体化扫描 | ✅ | workspace XML + 标记为业务模块的 runtime 依赖 JAR XML，成功后原子发布 |
+| 分场景依赖索引 | ✅ | 完整 workspace、仅最高本地 parent 边界、外部 SQLite 索引合并、纯 workspace 四种模式 |
+| 外部索引复用 | ✅ | `scan --external-db` 或 `.apsgraph.json externalIndexes`，workspace 定义优先并可跨索引解析引用 |
+| 未解析引用警告 | ✅ | 纯 workspace 扫描返回 `unresolved_models` 并输出 stderr warning，不阻断扫描 |
 | 版本与参数查看 | ✅ | `apsgraph --version` 输出版本；`apsgraph options` 只读输出默认参数与 workspace 生效规则 |
 | 扫描阶段日志 | ✅ | `scan --include-deps` 在 stderr 输出关键阶段与项目进度，stdout 保持 JSON |
 | Maven 阶段并行 | ✅ | build 与 dependencies 两阶段串行；阶段内独立 reactor/项目按 `--jobs` 并行 |

@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from apsgraph.scanner import scan_workspace, sync_workspace, workspace_status
+from apsgraph.scanner import scan_workspace, scan_workspace_with_external_indexes, sync_workspace, workspace_status
 from apsgraph.store import connect, get_stats, references
 from tests.test_scanner import FIXTURE_FILES
 
@@ -188,3 +188,63 @@ class IncrementalV2Test(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ExternalIndexTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_external_index_resolves_workspace_references_and_survives_sync(self):
+        dependency_root = self.root / "dependency"
+        dependency_root.mkdir()
+        (dependency_root / "Base.u_schema.xml").write_text(
+            '<schema id="Base"><restrictionType id="Code"/></schema>',
+            encoding="utf-8",
+        )
+        dependency_db = dependency_root / ".apsgraph" / "dependency.db"
+        scan_workspace(dependency_root, dependency_db)
+
+        workspace = self.root / "application"
+        workspace.mkdir()
+        (workspace / "Work.c_schema.xml").write_text(
+            '<schema id="Work"><complexType id="Thing"><element id="Name" type="Base.Code"/></complexType></schema>',
+            encoding="utf-8",
+        )
+        target = workspace / ".apsgraph" / "apsgraph.db"
+        summary, external = scan_workspace_with_external_indexes(
+            workspace, target, [dependency_db]
+        )
+
+        self.assertEqual(1, summary.unresolved)
+        self.assertEqual(0, external["unresolved"])
+        conn = connect(target, read_only=True)
+        try:
+            paths = {row[0] for row in conn.execute("select path from model_files")}
+            self.assertTrue(any(path.startswith(f"external-db:{dependency_db.resolve()}!") for path in paths))
+        finally:
+            conn.close()
+
+        sync_workspace(workspace, target)
+        conn = connect(target, read_only=True)
+        try:
+            self.assertEqual(
+                1,
+                conn.execute("select count(*) from model_files where path like 'external-db:%'").fetchone()[0],
+            )
+        finally:
+            conn.close()
+
+    def test_plain_scan_reports_unresolved_model_names(self):
+        root = self.root / "local-only"
+        root.mkdir()
+        (root / "Work.c_schema.xml").write_text(
+            '<schema id="Work"><complexType id="Thing"><element id="Name" type="Missing.Type"/></complexType></schema>',
+            encoding="utf-8",
+        )
+        db = root / ".apsgraph" / "apsgraph.db"
+        summary = scan_workspace(root, db)
+        self.assertEqual(["Missing.Type"], summary.unresolved_models)

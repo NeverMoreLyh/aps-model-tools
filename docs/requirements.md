@@ -1,6 +1,6 @@
 # APSGraph 需求文档
 
-> 版本：0.11.0  
+> 版本：0.12.0
 > 更新时间：2026-08-23  
 > 文档定位：本文件是 APSGraph 的长期需求基线，汇总产品定位、用户需求、功能需求、非功能需求与演进需求。新增需求必须先更新本文，再进入设计与实现。
 
@@ -225,7 +225,8 @@ publish index atomically
 4. 提交 Git；
 5. 构建 wheel；
 6. 安装 CLI；
-7. 验证 `apsgraph --version` 与 `options`。
+7. 验证 `apsgraph --version` 与 `options`；
+8. 提交代码并推送到远端分支。
 
 ## 4. 非功能需求
 

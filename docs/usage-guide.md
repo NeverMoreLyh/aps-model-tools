@@ -1,6 +1,6 @@
 # APSGraph 使用说明
 
-> 版本：0.9.0
+> 版本：0.10.0
 > 更新时间：2026-08-23
 > 项目地址：https://github.com/NeverMoreLyh/aps-model-tools
 
@@ -120,7 +120,7 @@ apsgraph scan
 | `--project-jdk` | 项目/reactor glob 的 JDK profile 覆盖，格式 `PROJECT=PROFILE`，可重复 |
 | `--java-home` | profile 的显式 `JAVA_HOME`，格式 `PROFILE=PATH`，可重复 |
 
-普通 `scan` 不要求 Maven；未解析引用不会导致失败，JSON 的 `unresolved_models` 会列出缺失模型名，CLI 同时在 stderr 输出 warning。四种典型场景为：`scan --include-deps` 完整构建并解析全部依赖；`scan --include-deps --deps-mode framework` 只构建/解析最高本地 parent 边界；`scan --external-db DB` 复用依赖源码索引；普通 `scan` 只处理 workspace XML。`scan --include-deps` 的流程为：发现全部 `pom.xml`（排除 `target` 等目录）→ 识别 Maven aggregator/reactor 根项目并按 workspace 内依赖关系拓扑排序 → 按依赖约束执行默认 `mvn -B -DskipTests install`（有依赖关系的 reactor 保持先后顺序，独立 reactor 可由 `--jobs` 并行）→ 全部构建成功后并行执行各运行模块的 `dependency:list` 与 `dependency:copy-dependencies` → 检查依赖 POM 的业务模块标记并过滤 JAR → 扫描 workspace XML 并导入业务依赖 JAR XML → 原子替换最终索引。任一 Maven 项目失败、同一 `groupId:artifactId` 解析出多个版本、或依赖 XML 解析失败时立即退出，不替换已有索引。
+普通 `scan` 不要求 Maven；未解析引用不会导致失败，JSON 的 `unresolved_models` 会列出缺失模型名，CLI 同时在 stderr 输出 warning。依赖 JAR 或外部索引导入完成后，`scan.unresolved` / `scan.unresolved_models` 会按最终数据库重新计算；`scan --include-deps` 额外返回 `workspace_unresolved_before_dependency_import` 用于对比导入前状态。扫描器不会把 error 描述、SQL/Java primitive、`class` / `resultClass` Java 类名当作 APS 模型引用，并会把空格分隔的多值 `extension` 拆成多条 EXTENDS 边。四种典型场景为：`scan --include-deps` 完整构建并解析全部依赖；`scan --include-deps --deps-mode framework` 只构建/解析最高本地 parent 边界；`scan --external-db DB` 复用依赖源码索引；普通 `scan` 只处理 workspace XML。`scan --include-deps` 的流程为：发现全部 `pom.xml`（排除 `target` 等目录）→ 识别 Maven aggregator/reactor 根项目并按 workspace 内依赖关系拓扑排序 → 按依赖约束执行默认 `mvn -B -DskipTests install`（有依赖关系的 reactor 保持先后顺序，独立 reactor 可由 `--jobs` 并行）→ 全部构建成功后并行执行各运行模块的 `dependency:list` 与 `dependency:copy-dependencies` → 检查依赖 POM 的业务模块标记并过滤 JAR → 扫描 workspace XML 并导入业务依赖 JAR XML → 原子替换最终索引。任一 Maven 项目失败、同一 `groupId:artifactId` 解析出多个版本、或依赖 XML 解析失败时立即退出，不替换已有索引。
 
 进度日志输出到 stderr，最终 JSON 仍输出到 stdout，便于管道处理。关键阶段包括项目发现、workspace 构建、每个 reactor 构建、依赖解析、版本冲突检查、workspace XML 扫描、JAR 模型导入和原子发布。
 

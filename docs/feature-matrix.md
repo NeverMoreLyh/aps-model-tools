@@ -1,6 +1,6 @@
 # APSGraph 功能支持清单
 
-> 版本：0.9.0
+> 版本：0.10.0
 > 更新时间：2026-08-23
 
 ---
@@ -23,7 +23,8 @@
 | 依赖模型一体化扫描 | ✅ | workspace XML + 标记为业务模块的 runtime 依赖 JAR XML，成功后原子发布 |
 | 分场景依赖索引 | ✅ | 完整 workspace、仅最高本地 parent 边界、外部 SQLite 索引合并、纯 workspace 四种模式 |
 | 外部索引复用 | ✅ | `scan --external-db` 或 `.apsgraph.json externalIndexes`，workspace 定义优先并可跨索引解析引用 |
-| 未解析引用警告 | ✅ | 纯 workspace 扫描返回 `unresolved_models` 并输出 stderr warning，不阻断扫描 |
+| 未解析引用警告 | ✅ | 纯 workspace 扫描返回 `unresolved_models` 并输出 stderr warning，不阻断扫描；依赖导入后按最终索引刷新统计 |
+| 非模型引用过滤 | ✅ | 过滤 error 描述、SQL/Java primitive 与 Java 类名，拆分多值 `extension`，降低 unresolved 噪声 |
 | 版本与参数查看 | ✅ | `apsgraph --version` 输出版本；`apsgraph options` 只读输出默认参数与 workspace 生效规则 |
 | 扫描阶段日志 | ✅ | `scan --include-deps` 在 stderr 输出关键阶段与项目进度，stdout 保持 JSON |
 | Maven 阶段并行 | ✅ | build 与 dependencies 两阶段串行；阶段内独立 reactor/项目按 `--jobs` 并行 |

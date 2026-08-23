@@ -219,7 +219,7 @@ class ExternalIndexTest(unittest.TestCase):
             workspace, target, [dependency_db]
         )
 
-        self.assertEqual(1, summary.unresolved)
+        self.assertEqual(0, summary.unresolved)
         self.assertEqual(0, external["unresolved"])
         conn = connect(target, read_only=True)
         try:

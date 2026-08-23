@@ -6,7 +6,7 @@ import os
 import sqlite3
 import tempfile
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Dict, Iterator, List, Optional, Tuple
 import xml.etree.ElementTree as ET
@@ -44,8 +44,55 @@ REFERENCE_ATTRS = {
     "extension": "EXTENDS", "serviceType": "IMPLEMENTS", "serviceName": "CALLS_SERVICE",
     "transactionId": "CALLS_TRANSACTION", "transaction": "CALLS_TRANSACTION",
     "dataItem": "TYPE_REF", "jobDataItem": "TYPE_REF", "groupInfo": "TYPE_REF",
-    "class": "TYPE_REF", "clazz": "TYPE_REF", "resultClass": "TYPE_REF",
 }
+
+# Some attributes are shared by multiple XML schemas.  In particular, ``class``
+# and ``resultClass`` identify Java classes, not APS model IDs.  Treating them as
+# APS TYPE_REF edges creates permanent unresolved noise because Java classes are
+# intentionally outside this metadata graph.
+NON_MODEL_REFERENCE_TAGS = {"error"}
+
+TAG_REFERENCE_ATTR_EXCEPTIONS = {
+    "index": {"type"},
+    "parameterMap": {"class", "clazz", "resultClass"},
+    "resultMap": {"class", "clazz", "resultClass"},
+}
+
+BUILTIN_TYPE_VALUES = {
+    "string", "fixstring", "encstring", "int", "integer", "long", "boolean",
+    "decimal", "datestring", "datetime", "timestamp", "clob", "object", "map",
+    "error", "warn", "message", "sql", "index", "unique", "primarykey",
+    "datestring8",
+    "java.lang.string", "java.lang.long", "java.lang.integer",
+    "java.math.bigdecimal", "java.util.map",
+}
+
+
+def _model_reference_values(suffix: str, tag: str, attr: str, raw_value: str) -> List[str]:
+    value = raw_value.strip()
+    if not value or suffix == ".error.xml" or tag in NON_MODEL_REFERENCE_TAGS:
+        return []
+    # Table extension supports whitespace-separated base tables.  Keep each
+    # target as a separate edge so both references can resolve independently.
+    candidates = value.split() if attr == "extension" else [value]
+    return [candidate for candidate in candidates if _is_model_reference(tag, attr, candidate)]
+
+
+def _is_model_reference(tag: str, attr: str, raw_value: str) -> bool:
+    value = raw_value.strip()
+    if not value:
+        return False
+    if attr in TAG_REFERENCE_ATTR_EXCEPTIONS.get(tag, set()):
+        return False
+    normalized = value.casefold()
+    if normalized in BUILTIN_TYPE_VALUES or normalized.startswith(("java.", "javax.")):
+        return False
+    # SQL parameter type values are either primitive names or Java identifiers.
+    # Real APS type references in this position are qualified (for example,
+    # BaseType.U_LONG_DSC); unqualified lower-camel names are not model IDs.
+    if tag == "parameter" and "." not in value and value[:1].islower():
+        return False
+    return True
 
 
 @dataclass(frozen=True)
@@ -197,8 +244,8 @@ def _register_parsed(conn: sqlite3.Connection, logical_path: str, suffix: str,
             if owner_node_id is not None:
                 _insert_edge(conn, owner_node_id, "CONTAINS", file_id, full_id, to_node_id=current_node_id)
             for attr, relation in REFERENCE_ATTRS.items():
-                value = attrs.get(attr)
-                if value:
+                raw_value = attrs.get(attr, "")
+                for value in _model_reference_values(suffix, tag, attr, raw_value):
                     _insert_edge(conn, current_node_id, relation, file_id, value, raw_target=value)
         child_parent_full = parent_full if tag in CONTAINER_TAGS and not raw_id else current_full
         for child in list(element):
@@ -434,6 +481,35 @@ def _summary(conn: sqlite3.Connection, discovered: int) -> ScanSummary:
     )
 
 
+def refresh_scan_summary(summary: ScanSummary, db_path: Path | str) -> ScanSummary:
+    """Refresh graph counters from an index while retaining workspace scan counts.
+
+    Dependency imports add files and nodes after the workspace scan.  The scan
+    summary returned to callers must describe the final published graph, while
+    discovered/parsed/failed file counts still describe workspace XML scanning.
+    """
+    target = Path(db_path).resolve()
+    conn = connect(target, read_only=True)
+    try:
+        stats = get_stats(conn)
+        unresolved_models = [
+            row[0] for row in conn.execute(
+                """select distinct raw_target from edges
+                   where to_node_id is null and raw_target is not null
+                   order by raw_target"""
+            )
+        ]
+    finally:
+        conn.close()
+    return replace(
+        summary,
+        nodes=stats["nodes"],
+        edges=stats["edges"],
+        unresolved=stats["unresolved"],
+        unresolved_models=unresolved_models,
+    )
+
+
 def scan_workspace(workspace: Path | str, db_path: Path | str, fail_on_parse_error: bool = False) -> ScanSummary:
     root = Path(workspace).resolve()
     _validate_workspace(root)
@@ -492,8 +568,9 @@ def scan_workspace_with_external_indexes(
     staging = Path(temp_name)
     staging.unlink()
     try:
-        summary = scan_workspace(root, staging, fail_on_parse_error=fail_on_parse_error)
+        workspace_summary = scan_workspace(root, staging, fail_on_parse_error=fail_on_parse_error)
         result = import_external_indexes(staging, external_indexes)
+        summary = refresh_scan_summary(workspace_summary, staging)
         os.replace(staging, target)
         return summary, result
     finally:

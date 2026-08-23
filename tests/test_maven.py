@@ -30,7 +30,7 @@ from apsgraph.store import connect
 WORKSPACE_MODEL = """<?xml version="1.0"?>
 <schema id="WorkTables" package="work">
   <table id="work_user" name="work_user">
-    <fields><field id="name" type="string" nullable="false"/></fields>
+    <fields><field id="name" type="FrameworkTypes.U_NAME" nullable="false"/></fields>
   </table>
 </schema>
 """
@@ -255,6 +255,11 @@ class MavenWorkspaceTest(unittest.TestCase):
         result = scan_workspace_with_dependencies(self.root, self.db, runner=self.runner())
         self.assertEqual(1, result.scan["parsed_files"])
         self.assertEqual(1, result.import_result["imported_files"])
+        self.assertGreaterEqual(
+            result.scan["workspace_unresolved_before_dependency_import"], 1
+        )
+        self.assertEqual(0, result.scan["unresolved"])
+        self.assertNotIn("FrameworkTypes.U_NAME", result.scan["unresolved_models"])
         paths = self.model_paths(self.db)
         self.assertIn("models/Work.tables.xml", paths)
         self.assertTrue(any(path.startswith("jar:") and path.endswith("Framework.u_schema.xml") for path in paths))

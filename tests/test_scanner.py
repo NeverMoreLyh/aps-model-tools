@@ -32,7 +32,7 @@ FIXTURE_FILES = {
   <table id="audit" name="audit">
     <fields><field id="created_at" type="string" nullable="false"/></fields>
   </table>
-  <table id="demo_user" name="demo_user" extension="DemoTables.audit">
+  <table id="demo_user" name="demo_user" extension=" DemoTables.audit ">
     <fields>
       <field id="id" type="Base.U_ID" primarykey="true" nullable="false"/>
       <field id="name" type="Base.U_NAME_CHILD" ref="DemoDict.A.name" nullable="false" default="''"/>
@@ -88,6 +88,54 @@ class ScannerTest(unittest.TestCase):
         self.assertEqual(1, len(dictionary))
         dict_incoming = references(conn, dictionary[0]["stable_id"], "in", 1)
         self.assertIn("DICT_REF", {e["relation_kind"] for e in dict_incoming["edges"]})
+
+    def test_non_model_attributes_do_not_become_unresolved_references(self):
+        root = self.root / "non-model"
+        root.mkdir()
+        (root / "Demo.error.xml").write_text(
+            '<errors><error id="E1" type="error" message="failed">'
+            '<parameter id="qty" type="BaseType.U_LRG_QTY" ref="数量"/></error></errors>',
+            encoding="utf-8",
+        )
+        (root / "Demo.nsql.xml").write_text(
+            '''<sqls id="DemoSql">'''
+            '<parameterMap id="map" class="java.util.Map">'
+            '<parameter id="systemId" type="systemId"/></parameterMap>'
+            '<select id="find" type="sql">select 1</select></sqls>',
+            encoding="utf-8",
+        )
+        db = root / "models.db"
+        summary = scan_workspace(root, db)
+        self.assertEqual([], summary.unresolved_models)
+        conn = connect(db)
+        try:
+            raw_targets = {row[0] for row in conn.execute("select raw_target from edges")}
+        finally:
+            conn.close()
+        self.assertFalse({"error", "message", "java.util.Map", "systemId", "sql"} & raw_targets)
+
+    def test_multi_valued_table_extension_creates_one_edge_per_target(self):
+        root = self.root / "multi-extension"
+        root.mkdir()
+        (root / "Demo.tables.xml").write_text(
+            '''<schema id="Demo">'''
+            '<table id="first"/><table id="second"/>'
+            '<table id="both" extension="Demo.first Demo.second"/></schema>',
+            encoding="utf-8",
+        )
+        db = root / "models.db"
+        summary = scan_workspace(root, db)
+        self.assertEqual(0, summary.unresolved)
+        conn = connect(db)
+        try:
+            raw_targets = {
+                row[0] for row in conn.execute(
+                    "select raw_target from edges where relation_kind='EXTENDS'"
+                )
+            }
+        finally:
+            conn.close()
+        self.assertEqual({"Demo.first", "Demo.second"}, raw_targets)
 
     def test_scan_rejects_missing_workspace(self):
         missing = self.root / "does-not-exist"

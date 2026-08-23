@@ -25,7 +25,7 @@ from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Callable, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
-from .scanner import import_jar_models, recognized_suffix, scan_workspace
+from .scanner import import_jar_models, recognized_suffix, refresh_scan_summary, scan_workspace
 from .store import connect
 
 DEP_SCOPES = ("compile", "runtime", "test")
@@ -1580,7 +1580,7 @@ def scan_workspace_with_dependencies(
     try:
         if progress:
             progress("stage 5/7 scan workspace XML")
-        scan_summary = scan_workspace(root, staging, fail_on_parse_error=fail_on_parse_error)
+        workspace_scan_summary = scan_workspace(root, staging, fail_on_parse_error=fail_on_parse_error)
         if progress:
             progress("stage 6/7 import dependency JAR models")
         import_result = import_jar_models(staging, inventory.jars)
@@ -1597,8 +1597,13 @@ def scan_workspace_with_dependencies(
             staging.unlink()
     if progress:
         progress(f"complete: {target}")
+    scan_summary = refresh_scan_summary(workspace_scan_summary, target)
+    scan_payload = asdict(scan_summary)
+    scan_payload["workspace_unresolved_before_dependency_import"] = (
+        workspace_scan_summary.unresolved
+    )
     return FullScanResult(
-        scan=asdict(scan_summary),
+        scan=scan_payload,
         build=asdict(build_report),
         dependencies=inventory.summary(),
         import_result=import_result,

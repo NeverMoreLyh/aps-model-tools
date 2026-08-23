@@ -118,15 +118,16 @@ def _expanded_fields(conn: sqlite3.Connection, table: Dict[str, Any], visited: O
     errors: List[str] = []
     extension = _props(table).get("extension")
     if extension:
-        parents = [n for n in find_nodes(conn, extension) if n["kind"] in {"TABLE", "COMPLEX_TYPE"}]
-        if len(parents) != 1:
-            errors.append(f"unresolved or ambiguous table extension: {extension}")
-        elif parents[0]["kind"] == "TABLE":
-            parent_fields, parent_errors = _expanded_fields(conn, parents[0], visited)
-            fields.extend(parent_fields)
-            errors.extend(parent_errors)
-        else:
-            fields.extend(_descendants(conn, parents[0]["stable_id"], "ELEMENT"))
+        for extension_ref in str(extension).split():
+            parents = [n for n in find_nodes(conn, extension_ref) if n["kind"] in {"TABLE", "COMPLEX_TYPE"}]
+            if len(parents) != 1:
+                errors.append(f"unresolved or ambiguous table extension: {extension_ref}")
+            elif parents[0]["kind"] == "TABLE":
+                parent_fields, parent_errors = _expanded_fields(conn, parents[0], visited)
+                fields.extend(parent_fields)
+                errors.extend(parent_errors)
+            else:
+                fields.extend(_descendants(conn, parents[0]["stable_id"], "ELEMENT"))
     local = _descendants(conn, table["stable_id"], "FIELD")
     by_name = {field["raw_id"]: field for field in fields}
     for field in local:

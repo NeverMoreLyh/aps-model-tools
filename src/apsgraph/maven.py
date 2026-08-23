@@ -42,6 +42,9 @@ class MavenError(ValueError):
     """A Maven workspace operation failed and the index must not be published."""
 
 
+BUSINESS_MODULE_PROPERTIES = ("edsp-module", "aps-module")
+
+
 @dataclass(frozen=True)
 class MavenProject:
     path: Path
@@ -121,6 +124,7 @@ class ImportedJar:
     sha256: str
     artifacts: List[str] = field(default_factory=list)
     model_files: int = 0
+    business_marker: str = ""
 
 
 @dataclass
@@ -132,6 +136,7 @@ class DependencyInventory:
     reactor_dependencies_excluded: List[str]
     jars_with_models: List[str]
     jars_without_models: List[str]
+    jars_skipped_non_business: List[str]
     manifest: Path
     scope: str
     projects_excluded: List[str]
@@ -147,6 +152,7 @@ class DependencyInventory:
             "reactor_dependencies_excluded": len(self.reactor_dependencies_excluded),
             "jars_with_models": len(self.jars_with_models),
             "jars_without_models": len(self.jars_without_models),
+            "jars_skipped_non_business": len(self.jars_skipped_non_business),
             "manifest": str(self.manifest),
         }
 
@@ -950,6 +956,79 @@ def _jar_has_models(path: Path) -> bool:
         raise MavenError(f"dependency is not a readable jar: {path}: {exc}") from exc
 
 
+def _business_marker_from_pom_source(source: bytes | Path, source_name: str) -> Optional[str]:
+    try:
+        root = ET.fromstring(source if isinstance(source, bytes) else source.read_bytes())
+    except (OSError, ET.ParseError) as exc:
+        raise MavenError(f"invalid dependency pom {source_name}: {exc}") from exc
+    namespace = root.tag.rsplit("}", 1)[0].strip("{") if "}" in root.tag else ""
+
+    def tag(name: str) -> str:
+        return f"{{{namespace}}}{name}" if namespace else name
+
+    properties = root.find(tag("properties"))
+    if properties is None:
+        return None
+    for name in BUSINESS_MODULE_PROPERTIES:
+        value = properties.findtext(tag(name))
+        if value is not None and value.strip().lower() == "true":
+            return name
+    return ""
+
+
+def _embedded_dependency_pom(jar: Path, dependency: MavenDependency) -> Optional[bytes]:
+    try:
+        with zipfile.ZipFile(jar) as archive:
+            names = {
+                name: name
+                for name in archive.namelist()
+                if name == f"META-INF/maven/{dependency.group_id}/{dependency.artifact_id}/pom.xml"
+            }
+            if not names:
+                return None
+            return archive.read(next(iter(names)))
+    except (OSError, zipfile.BadZipFile, KeyError) as exc:
+        raise MavenError(f"dependency is not a readable jar: {jar}: {exc}") from exc
+
+
+def _settings_local_repository() -> Optional[Path]:
+    configured = os.environ.get("MAVEN_REPO_LOCAL")
+    if configured:
+        return Path(configured).expanduser()
+    settings = Path.home() / ".m2" / "settings.xml"
+    if not settings.is_file():
+        return Path.home() / ".m2" / "repository"
+    try:
+        root = ET.parse(settings).getroot()
+    except (OSError, ET.ParseError):
+        return Path.home() / ".m2" / "repository"
+    namespace = root.tag.rsplit("}", 1)[0].strip("{") if "}" in root.tag else ""
+    tag = f"{{{namespace}}}localRepository" if namespace else "localRepository"
+    value = root.findtext(tag, default="").strip()
+    return Path(value).expanduser() if value else Path.home() / ".m2" / "repository"
+
+
+def _dependency_business_marker(jar: Path, dependency: MavenDependency) -> Optional[str]:
+    """Read the artifact POM before opening or importing jar XML.
+
+    ``None`` means no marker property was present and ``""`` means a marker was
+    present but disabled. Both cases are non-business dependencies; preserving
+    the distinction makes troubleshooting manifests actionable.
+    """
+    embedded = _embedded_dependency_pom(jar, dependency)
+    if embedded is not None:
+        return _business_marker_from_pom_source(embedded, f"{jar}!META-INF/maven/.../pom.xml")
+
+    pom = (
+        _settings_local_repository()
+        / dependency.group_id.replace(".", "/")
+        / dependency.artifact_id
+        / dependency.version
+        / f"{dependency.artifact_id}-{dependency.version}.pom"
+    )
+    return _business_marker_from_pom_source(pom, str(pom)) if pom.is_file() else None
+
+
 def _project_exclusion_values(workspace: Path, project: MavenProject) -> Set[str]:
     relative = _relative(workspace, project.path)
     return {
@@ -1203,6 +1282,7 @@ def collect_dependencies(
     jar_by_coordinate: Dict[str, ImportedJar] = {}
     duplicates: List[str] = []
     missing: List[str] = []
+    skipped_non_business: List[str] = []
     for dependency in sorted(
         unique_dependencies.values(),
         key=lambda item: (item.group_id, item.artifact_id, item.version, item.classifier),
@@ -1215,8 +1295,13 @@ def collect_dependencies(
                 f"{dependency.version}:{dependency.classifier or 'jar'}"
             )
             continue
-        digest = _sha256(copied)
         coordinate = f"{dependency.group_id}:{dependency.artifact_id}:{dependency.version}"
+        marker = _dependency_business_marker(copied, dependency)
+        if not marker:
+            reason = "property missing" if marker is None else "property disabled"
+            skipped_non_business.append(f"{coordinate}; reason: {reason}")
+            continue
+        digest = _sha256(copied)
         existing = jar_by_coordinate.get(coordinate)
         if existing is not None and existing.sha256 != digest:
             raise MavenError(f"same Maven artifact resolved to different jar content: {coordinate}")
@@ -1230,6 +1315,7 @@ def collect_dependencies(
             path=str(copied),
             sha256=digest,
             artifacts=[coordinate],
+            business_marker=marker,
         )
 
     if missing:
@@ -1237,6 +1323,11 @@ def collect_dependencies(
 
     records = list(jar_by_coordinate.values())
     jars = [Path(record.path) for record in records]
+    if progress:
+        progress(
+            f"dependency POM business markers: {len(records)} business, "
+            f"{len(skipped_non_business)} skipped"
+        )
     with_models: List[str] = []
     without_models: List[str] = []
     for jar in jars:
@@ -1253,6 +1344,7 @@ def collect_dependencies(
             ),
         )],
         "jars": [asdict(record) for record in records],
+        "jars_skipped_non_business": sorted(skipped_non_business),
         "reactor_dependencies_excluded": sorted(excluded_reactor),
         "projects_analyzed": len(analysis_projects),
         "projects_excluded": excluded_project_records,
@@ -1269,6 +1361,7 @@ def collect_dependencies(
         reactor_dependencies_excluded=sorted(excluded_reactor),
         jars_with_models=with_models,
         jars_without_models=without_models,
+        jars_skipped_non_business=sorted(skipped_non_business),
         manifest=manifest,
         scope=scope,
         projects_excluded=excluded_project_records,

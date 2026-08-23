@@ -1,6 +1,6 @@
 # APSGraph 使用说明
 
-> 版本：0.7.0
+> 版本：0.8.0
 > 更新时间：2026-08-23
 > 项目地址：https://github.com/NeverMoreLyh/aps-model-tools
 
@@ -118,7 +118,7 @@ apsgraph scan
 | `--project-jdk` | 项目/reactor glob 的 JDK profile 覆盖，格式 `PROJECT=PROFILE`，可重复 |
 | `--java-home` | profile 的显式 `JAVA_HOME`，格式 `PROFILE=PATH`，可重复 |
 
-普通 `scan` 不要求 Maven。`scan --include-deps` 的流程为：发现全部 `pom.xml`（排除 `target` 等目录）→ 识别 Maven aggregator/reactor 根项目并按 workspace 内依赖关系拓扑排序 → 按依赖约束执行默认 `mvn -B -DskipTests install`（有依赖关系的 reactor 保持先后顺序，独立 reactor 可由 `--jobs` 并行）→ 全部构建成功后并行执行各运行模块的 `dependency:list` 与 `dependency:copy-dependencies` → 扫描 workspace XML 并导入依赖 JAR XML → 原子替换最终索引。任一 Maven 项目失败、同一 `groupId:artifactId` 解析出多个版本、或依赖 XML 解析失败时立即退出，不替换已有索引。
+普通 `scan` 不要求 Maven。`scan --include-deps` 的流程为：发现全部 `pom.xml`（排除 `target` 等目录）→ 识别 Maven aggregator/reactor 根项目并按 workspace 内依赖关系拓扑排序 → 按依赖约束执行默认 `mvn -B -DskipTests install`（有依赖关系的 reactor 保持先后顺序，独立 reactor 可由 `--jobs` 并行）→ 全部构建成功后并行执行各运行模块的 `dependency:list` 与 `dependency:copy-dependencies` → 检查依赖 POM 的业务模块标记并过滤 JAR → 扫描 workspace XML 并导入业务依赖 JAR XML → 原子替换最终索引。任一 Maven 项目失败、同一 `groupId:artifactId` 解析出多个版本、或依赖 XML 解析失败时立即退出，不替换已有索引。
 
 进度日志输出到 stderr，最终 JSON 仍输出到 stdout，便于管道处理。关键阶段包括项目发现、workspace 构建、每个 reactor 构建、依赖解析、版本冲突检查、workspace XML 扫描、JAR 模型导入和原子发布。
 
@@ -169,7 +169,7 @@ apsgraph scan --include-deps
 }
 ```
 
-除了显式排除规则外，`packaging=pom` 与带 `<modules>` 的普通 aggregator 不执行依赖解析；workspace 内 parent 链只解析最高本地边界。例如 `prod-parent -> ap-out-parent -> ap-parent -> external parent` 时，`prod-parent`、`ap-out-parent` 是中间 parent，会被跳过，只解析 `ap-parent`，避免同一条 parent 链重复解析传递依赖。项目级规则始终生效；默认跳过 artifactId 或项目路径匹配 `*dist` 的项目依赖分析；例如 `delivery-dist`、`packaging/*dist`。该规则只影响依赖解析与 JAR 导入，不影响 Maven reactor 构建。可用 `--exclude-project` 增加规则，例如 `--exclude-project 'packaging/*'`；添加 `--no-default-project-excludes` 可关闭默认规则。清单会记录 `projects_analyzed` 与 `projects_excluded`。
+除了显式排除规则外，`packaging=pom` 与带 `<modules>` 的普通 aggregator 不执行依赖解析；workspace 内 parent 链只解析最高本地边界。例如 `prod-parent -> ap-out-parent -> ap-parent -> external parent` 时，`prod-parent`、`ap-out-parent` 是中间 parent，会被跳过，只解析 `ap-parent`，避免同一条 parent 链重复解析传递依赖。项目级规则始终生效；默认跳过 artifactId 或项目路径匹配 `*dist` 的项目依赖分析；例如 `delivery-dist`、`packaging/*dist`。依赖 JAR 导入前会先读取 artifact POM：只有 `<properties>` 中 `<edsp-module>true</edsp-module>` 或 `<aps-module>true</aps-module>` 才会被视为业务模块并继续检索 XML；属性缺失或值为 `false` 时直接跳过，不再按 XML 后缀盲目导入。该规则只影响依赖解析与 JAR 导入，不影响 Maven reactor 构建。可用 `--exclude-project` 增加规则，例如 `--exclude-project 'packaging/*'`；添加 `--no-default-project-excludes` 可关闭默认规则。清单会记录 `projects_analyzed` 与 `projects_excluded`。
 
 #### 混合 JDK workspace
 
@@ -204,7 +204,7 @@ apsgraph import-maven-deps --build
 apsgraph import-maven-deps --deps-scope compile --maven-goal package --no-skip-tests
 ```
 
-`import-maven-deps` 会先在 staging 数据库中删除旧的 `jar:` 逻辑文件，再导入本次解析到的 JAR，成功后原子替换原索引；`--build` 时才执行 Maven 构建。
+`import-maven-deps` 会先在 staging 数据库中删除旧的 `jar:` 逻辑文件，再导入本次解析到且 POM 标记为业务模块的 JAR，成功后原子替换原索引；`--build` 时才执行 Maven 构建。
 
 处理规则：
 

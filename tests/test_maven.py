@@ -74,10 +74,29 @@ def write_pom(path: Path, artifact_id: str, dependencies=(), modules=(), packagi
     )
 
 
-def write_model_jar(path: Path, model=JAR_MODEL, entry="models/Framework.u_schema.xml"):
+def write_model_jar(
+    path: Path,
+    model=JAR_MODEL,
+    entry="models/Framework.u_schema.xml",
+    marker_property="edsp-module",
+    marker_value="true",
+    group_id="com.example",
+    artifact_id="shared",
+    version="1.0.0",
+):
     path.parent.mkdir(parents=True, exist_ok=True)
+    properties = ""
+    if marker_property is not None:
+        properties = f"<properties><{marker_property}>{marker_value}</{marker_property}></properties>"
+    pom = (
+        '<project xmlns="http://maven.apache.org/POM/4.0.0">'
+        "<modelVersion>4.0.0</modelVersion>"
+        f"<groupId>{group_id}</groupId><artifactId>{artifact_id}</artifactId>"
+        f"<version>{version}</version>{properties}</project>"
+    )
     with zipfile.ZipFile(path, "w") as archive:
         archive.writestr(entry, model)
+        archive.writestr(f"META-INF/maven/{group_id}/{artifact_id}/pom.xml", pom)
 
 
 class FakeMaven:
@@ -120,6 +139,11 @@ class FakeMaven:
                 path = output / f"{artifact}-{version}.jar"
                 if model is None:
                     path.write_bytes(b"not a model jar but also not a zip")
+                elif isinstance(model, dict):
+                    write_model_jar(
+                        path, JAR_MODEL, group_id=group,
+                        version=version, **model,
+                    )
                 else:
                     write_model_jar(path, model)
             return subprocess.CompletedProcess(command, 0, "", "")
@@ -436,6 +460,56 @@ class MavenWorkspaceTest(unittest.TestCase):
         runner.jars["org.jetbrains:annotations:22.0.0"] = JAR_MODEL
         with self.assertRaisesRegex(MavenError, "org.jetbrains:annotations -> 22.0.0, 23.0.0"):
             collect_dependencies(self.root, discover_maven_projects(self.root), runner=runner)
+
+    def test_dependency_jars_are_filtered_by_business_pom_marker(self):
+        isolated = self.root / "business-marker"
+        write_pom(isolated / "app/pom.xml", "app", [
+            ("com.example", "edsp", "1.0.0", "compile"),
+            ("com.example", "aps", "1.0.0", "compile"),
+            ("com.example", "disabled", "1.0.0", "compile"),
+            ("com.example", "unmarked", "1.0.0", "compile"),
+        ])
+        runner = FakeMaven(
+            dependencies={
+                "app": [
+                    "com.example:edsp:jar:1.0.0:compile",
+                    "com.example:aps:jar:1.0.0:compile",
+                    "com.example:disabled:jar:1.0.0:compile",
+                    "com.example:unmarked:jar:1.0.0:compile",
+                ],
+            },
+            jars={},
+        )
+
+        def jar_fixture(marker_property, marker_value="true", artifact="shared"):
+            return {
+                "marker_property": marker_property,
+                "marker_value": marker_value,
+                "artifact_id": artifact,
+            }
+
+        runner.jars = {
+            "com.example:edsp:1.0.0": jar_fixture("edsp-module", artifact="edsp"),
+            "com.example:aps:1.0.0": jar_fixture("aps-module", artifact="aps"),
+            "com.example:disabled:1.0.0": jar_fixture("edsp-module", "false", "disabled"),
+            "com.example:unmarked:1.0.0": jar_fixture(None, artifact="unmarked"),
+        }
+        inventory = collect_dependencies(isolated, discover_maven_projects(isolated), runner=runner)
+
+        self.assertEqual({"edsp-1.0.0.jar", "aps-1.0.0.jar"}, {path.name for path in inventory.jars})
+        self.assertEqual(2, len(inventory.jars_skipped_non_business))
+        self.assertIn(
+            "com.example:disabled:1.0.0; reason: property disabled",
+            inventory.jars_skipped_non_business,
+        )
+        self.assertIn(
+            "com.example:unmarked:1.0.0; reason: property missing",
+            inventory.jars_skipped_non_business,
+        )
+        self.assertEqual(
+            {"edsp-module", "aps-module"},
+            {record.business_marker for record in inventory.jar_records},
+        )
 
     def test_same_jar_version_from_multiple_projects_is_deduplicated(self):
         # Both framework and app resolve the exact same Maven coordinate.  This

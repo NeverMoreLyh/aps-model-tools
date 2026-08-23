@@ -1,6 +1,6 @@
 # APSGraph 功能支持清单
 
-> 版本：0.7.0
+> 版本：0.8.0
 > 更新时间：2026-08-23
 
 ---
@@ -17,10 +17,10 @@
 | 跨文件引用解析 | ✅ | TYPE_REF/DICT_REF/EXTENDS 等 10+ 种关系 |
 | 增量同步 | ✅ | SHA-256 文件指纹，单事务增删改 |
 | 同步状态检查 | ✅ | 文件差异统计 |
-| JAR 模型导入 | ✅ | 从 Maven 依赖 JAR 提取框架基础模型 |
+| JAR 模型导入 | ✅ | 先读取依赖 POM，仅导入 `edsp-module` / `aps-module` 为 `true` 的业务 JAR，再提取模型 XML |
 | Maven workspace 构建 | ✅ | `scan --include-deps` 识别 aggregator 根目录并按依赖拓扑执行默认 `install -DskipTests`，独立 reactor 可通过 `--jobs` 并行 |
 | Maven JDK profile | ✅ | workspace 级 JDK 8/17 规则、CLI 覆盖、`JAVA_HOME` 注入与冲突阻断 |
-| 依赖模型一体化扫描 | ✅ | workspace XML + runtime 依赖 JAR XML，成功后原子发布 |
+| 依赖模型一体化扫描 | ✅ | workspace XML + 标记为业务模块的 runtime 依赖 JAR XML，成功后原子发布 |
 | 版本与参数查看 | ✅ | `apsgraph --version` 输出版本；`apsgraph options` 只读输出默认参数与 workspace 生效规则 |
 | 扫描阶段日志 | ✅ | `scan --include-deps` 在 stderr 输出关键阶段与项目进度，stdout 保持 JSON |
 | Maven 阶段并行 | ✅ | build 与 dependencies 两阶段串行；阶段内独立 reactor/项目按 `--jobs` 并行 |

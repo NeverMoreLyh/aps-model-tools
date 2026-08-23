@@ -1,5 +1,17 @@
 # APSGraph
 
+## Documentation map
+
+| Document | Purpose |
+|---|---|
+| [Requirements](docs/requirements.md) | Long-lived requirement baseline |
+| [Design](docs/design.md) | Architecture, key design, and performance |
+| [Product whitepaper](docs/product-whitepaper.md) | Product positioning, architecture, and functional map |
+| [Usage guide](docs/usage-guide.md) | Installation and command usage |
+| [Operations guide](docs/operations-guide.md) | Release, inspection, troubleshooting, performance, and rollback |
+| [Feature matrix](docs/feature-matrix.md) | Detailed capability status |
+| [DDL rules](docs/ddl-generation-rules.md) | Dialect-specific DDL generation rules |
+
 Read-only APS metadata scanner, compact SQLite relationship index, incremental sync, model-to-CodeGraph bridge, capability classification report, impact query, and Table-to-MySQL-DDL preview.
 
 ## Install as a command

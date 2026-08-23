@@ -1,6 +1,6 @@
 # APSGraph 使用说明
 
-> 版本：0.10.0
+> 版本：0.11.0
 > 更新时间：2026-08-23
 > 项目地址：https://github.com/NeverMoreLyh/aps-model-tools
 
@@ -72,6 +72,8 @@ apsgraph --help
 | `db-diff` | 模型与实际数据库 schema 差异对比 |
 | `bridge` | 模型 → 生成 Java → CodeGraph 消费者桥接 |
 | `classify` | 按功能能力审计模型与 Java 包分类 |
+| `doc-export` | 导出 Markdown 模型文档 |
+| `xlsx-export` | 导出 Excel 模型文档 |
 
 ---
 
@@ -384,6 +386,36 @@ apsgraph classify --workspace /path/to/v8.7-all --output output/audit.md --json-
 
 ---
 
+### 5.14 doc-export — Markdown 文档导出
+
+```bash
+# 导出全部模型文档到文件
+apsgraph doc-export --db .apsgraph/apsgraph.db --output aps-models.md
+
+# 只导出表模型
+apsgraph doc-export --type table --output aps-tables.md
+
+# 按模型查询过滤
+apsgraph doc-export --type table --tables CustomerInfo AccountInfo --output selected.md
+```
+
+`--type` 支持 `all`、`table`、`dict`、`schema`、`trans`、`nsql`、`service`。
+
+### 5.15 xlsx-export — Excel 文档导出
+
+```bash
+# 需要安装可选依赖：pip install apsgraph[excel]
+apsgraph xlsx-export --db .apsgraph/apsgraph.db --output-dir docs-xlsx
+
+# 指定类型
+apsgraph xlsx-export --output-dir docs-xlsx --types table dict
+
+# 指定项目
+apsgraph xlsx-export --output-dir docs-xlsx --projects ap-parent
+```
+
+可选类型包括 `table`、`table_list`、`dict`、`dict_ref`、`enum`、`trans`、`nsql`、`service`、`service_v2`、`params`、`error_code`、`batch_tran`。
+
 ## 6. 典型工作流
 
 ### 6.1 首次构建索引
@@ -461,3 +493,19 @@ apsgraph db-diff --dialect mysql --dsn-env MYSQL_DSN --output-md output/diff.md
 5. **分片表 DDL**：当前不展开分片表（原模板生成 `表名_0..表名_N-1`），工具按逻辑表名生成
 6. **自定义 DDL 片段**：`<ddls>` 标签的原生 SQL 片段不输出，遇到时以注释告警
 7. **db-ratio**：原生由首选项注入，工具提供参数但默认 1.0
+
+---
+
+## 9. 文档保鲜与维护入口
+
+APSGraph 长期维护五类核心文档：
+
+| 文档 | 维护内容 |
+|---|---|
+| `docs/requirements.md` | 产品定位、用户需求、全部功能/非功能需求、演进需求 |
+| `docs/design.md` | 关键架构、模块设计、数据模型、并发与性能设计 |
+| `docs/product-whitepaper.md` | 产品定位、架构设计、功能地图、价值与路线 |
+| `docs/usage-guide.md` | 安装、命令、参数、典型使用方式 |
+| `docs/operations-guide.md` | 发布、巡检、日志、故障、性能、备份与回滚 |
+
+新增或修改行为时，必须同步更新对应文档，并执行版本升级、测试、提交、wheel 构建和 CLI 验证。

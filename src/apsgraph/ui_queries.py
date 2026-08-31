@@ -59,6 +59,18 @@ def get_model(conn: sqlite3.Connection, stable_id: str) -> Optional[Dict[str, An
         "left join nodes dst on dst.id=e.to_node_id join model_files ef on ef.id=e.evidence_file_id "
         "where e.from_node_id=? or e.to_node_id=? order by e.relation_kind,e.id", (row["id"], row["id"])
     )]
+    if item["kind"] == "TRANSACTION":
+        sections = {"basic": [], "interfaces": [], "mappings": [], "orchestration": []}
+        for child in item["children"]:
+            tag = (child.get("xml_tag") or "").lower()
+            kind = (child.get("kind") or "").upper()
+            if tag in {"interface", "input", "output", "fields", "field", "parameter"} or "INTERFACE" in kind or "PARAMETER" in kind:
+                sections["interfaces"].append(child)
+            elif tag in {"mapping", "in_mappings", "out_mappings"} or "MAPPING" in kind:
+                sections["mappings"].append(child)
+            elif tag in {"flow", "service", "transaction", "condition", "route", "node"} or "FLOW" in kind or "CALL" in kind:
+                sections["orchestration"].append(child)
+        item["sections"] = sections
     return item
 
 

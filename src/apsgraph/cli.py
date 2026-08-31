@@ -180,6 +180,8 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument("--db", type=Path, default=DEFAULT_DB,
                       help="SQLite index path (default: .apsgraph/apsgraph.db)")
     scan.add_argument("--fail-on-parse-error", action="store_true")
+    scan.add_argument("--embed-xml", action="store_true",
+                      help="embed source XML bytes in the read-only index for offline UI viewing")
     scan.add_argument("--include-deps", action="store_true",
                       help="build Maven projects, copy resolved dependency jars, and include their model XML")
     scan.add_argument("--deps-mode", choices=["full", "framework"], default="full",
@@ -219,6 +221,8 @@ def build_parser() -> argparse.ArgumentParser:
     sync.add_argument("--db", type=Path, default=DEFAULT_DB,
                       help="SQLite index path (default: .apsgraph/apsgraph.db)")
     sync.add_argument("--fail-on-parse-error", action="store_true")
+    sync.add_argument("--embed-xml", action="store_true",
+                      help="embed added/modified source XML bytes in the index")
 
     status = sub.add_parser("status")
     status.add_argument("--workspace", type=Path, default=DEFAULT_WORKSPACE,
@@ -440,6 +444,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     try:
         if args.command == "scan":
             external_indexes = _external_indexes(args)
+            if args.embed_xml and (args.include_deps or external_indexes):
+                raise ValueError("--embed-xml currently supports workspace XML-only scans")
             if args.include_deps and external_indexes:
                 raise ValueError("--include-deps and --external-db are mutually exclusive")
             if args.include_deps:
@@ -468,7 +474,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 )
                 _json({"scan": asdict(summary), "external": external})
             else:
-                summary = scan_workspace(args.workspace, args.db, args.fail_on_parse_error)
+                summary = scan_workspace(args.workspace, args.db, args.fail_on_parse_error, args.embed_xml)
                 for target in summary.unresolved_models:
                     _progress(f"warning: unresolved model reference: {target}")
                 _json(asdict(summary))
@@ -477,7 +483,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             _json(_options_report(args.workspace))
             return 0
         if args.command == "sync":
-            summary = sync_workspace(args.workspace, args.db, args.fail_on_parse_error)
+            summary = sync_workspace(args.workspace, args.db, args.fail_on_parse_error, args.embed_xml)
             _json(asdict(summary))
             return 0
         if args.command == "status":

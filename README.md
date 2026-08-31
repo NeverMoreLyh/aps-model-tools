@@ -136,6 +136,8 @@ apsgraph sync
 
 `sync` compares normalized relative paths and SHA-256 hashes, applies added/modified/deleted files in one transaction, then rebinds cross-file references. It refuses legacy schema files and indexes owned by another workspace.
 
+`apsgraph scan --embed-xml` enables offline XML viewing. It stores each successfully parsed local XML file as one `xml_documents` row keyed by `file_id`; model nodes remain semantic (top-level plus meaningful children), not every DOM tag. `apsgraph sync --embed-xml` updates embedded content for added or modified files.
+
 ## Query and preview DDL
 
 ```bash

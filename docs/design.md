@@ -1,6 +1,6 @@
 # APSGraph 设计文档
 
-> 版本：0.13.0
+> 版本：0.14.0
 > 更新时间：2026-08-23  
 > 文档定位：说明 APSGraph 的关键架构、模块设计、数据模型、算法、并发模型、性能设计和安全边界。
 
@@ -68,14 +68,15 @@
 - 生成 dependency manifest。
 - 控制 staging DB 的原子发布。
 
-### 3.3 `apsgraph.store`
+### 3.4 `apsgraph.store`
 
 - SQLite schema 初始化与版本校验。
 - 只读连接和写连接隔离。
 - 提供模型查询和引用遍历原语。
+- 可选以 `xml_documents` 保存完整本地 XML，文件级关联 `file_id`。
 - 拒绝非 APS 索引数据库和跨 workspace 索引。
 
-### 3.4 分析模块
+### 3.5 分析模块
 
 | 模块 | 核心算法 |
 |---|---|
@@ -86,7 +87,36 @@
 | bridge | APS full_id 与生成 Java / CodeGraph 节点匹配 |
 | classify | 关键词与路径启发式分类 |
 
-## 4. 数据模型
+## 3.5 原始 XML 与语义节点索引
+
+扫描不采用“只保留顶层模型”或“每个 DOM 标签全部建节点”两种极端方案，而采用文件完整证据与语义投影分离：
+
+```text
+model_files（文件元数据、hash、解析状态）
+  ├── xml_documents（可选，--embed-xml 时保存完整原始 XML）
+  └── nodes（顶层模型 + 有业务语义的嵌套节点）
+        └── edges（包含、引用、调用、读写和证据）
+```
+
+`nodes` 继续保存 `owner_node_id` 层级，并优先索引具备稳定 id、可被引用、需要 UI 查询或参与关系分析的对象，例如 `TABLE`、`FIELD`、`INDEX`、`TRANSACTION`、`SERVICE`、`NAMED_SQL`、`PARAMETER`、`FLOW_NODE`。无业务语义的 XML 容器标签不单独建节点，但其属性保留在所属节点的 `properties_json` 中。
+
+`apsgraph scan --embed-xml` 在成功解析的本地 XML 文件上写入 `xml_documents(file_id, content, content_encoding, content_hash, content_size)`；默认扫描仍只保存路径和 hash，避免索引体积无条件膨胀。`apsgraph sync --embed-xml` 对新增/修改文件更新嵌入内容，删除文件依靠外键级联清理。
+
+归档 JAR 和 `external-db:` 逻辑路径当前不嵌入原始 XML；UI 应显示“外部证据不可用”，不得将属性 JSON 伪装为 XML 正文。
+
+### FlowTran 投影
+
+FlowTran 详情页依赖语义节点和关系，而不是顶层 `properties_json` 的字符串拼接：
+
+```text
+TRANSACTION
+  ├── INPUT/OUTPUT_INTERFACE / PARAMETER
+  ├── DATA_MAPPING
+  ├── FLOW_NODE / SERVICE_CALL / TRANSACTION_CALL
+  └── exception/route nodes
+```
+
+具体 XML tag 到 `kind` 的版本差异应由版本化投影规则配置承载；稳定 id、owner、源码路径、hash 和通用关系算法由代码实现。正式启用专用 Tab 前，必须以目标 workspace 的实际 `kind`、`xml_tag`、属性和关系结果校准。
 
 ### 4.1 核心表
 

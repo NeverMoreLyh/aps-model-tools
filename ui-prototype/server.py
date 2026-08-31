@@ -9,9 +9,11 @@ import sqlite3
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
-
+import sys
 ROOT = Path(__file__).resolve().parent
 STATIC = ROOT / "static"
+sys.path.insert(0, str(ROOT / ".." / "src"))
+from apsgraph.ui_queries import get_embedded_xml
 
 
 def connect(db: Path) -> sqlite3.Connection:
@@ -94,12 +96,14 @@ class Handler(BaseHTTPRequestHandler):
 
     def stats(self):
         with self.with_db() as db:
+            has_xml = db.execute("select count(*) from sqlite_schema where type='table' and name='xml_documents'").fetchone()[0] > 0
             self.json({
                 "files": db.execute("select count(*) from model_files").fetchone()[0],
                 "parsed": db.execute("select count(*) from model_files where parse_status='PARSED'").fetchone()[0],
                 "nodes": db.execute("select count(*) from nodes").fetchone()[0],
                 "edges": db.execute("select count(*) from edges").fetchone()[0],
                 "unresolved": db.execute("select count(*) from edges where to_node_id is null and raw_target is not null").fetchone()[0],
+                "xml_documents": db.execute("select count(*) from xml_documents").fetchone()[0] if has_xml else 0,
             })
 
     def kinds(self):
@@ -159,6 +163,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def xml(self, stable_id):
         with self.with_db() as db:
+            embedded = get_embedded_xml(db, stable_id)
+            if embedded and embedded["available"]:
+                self.json(embedded)
+                return
             row = db.execute(
                 "select f.path,n.full_id,n.xml_tag from nodes n join model_files f on f.id=n.file_id where n.stable_id=?",
                 (stable_id,),

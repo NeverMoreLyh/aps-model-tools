@@ -188,7 +188,7 @@ def _insert_edge(conn: sqlite3.Connection, from_node_id: int, relation: str, fil
     )
 
 
-def _parse_file(conn: sqlite3.Connection, workspace: Path, path: Path, suffix: str) -> bool:
+def _parse_file(conn: sqlite3.Connection, workspace: Path, path: Path, suffix: str, embed_xml: bool = False) -> bool:
     relative = path.relative_to(workspace).as_posix()
     content_hash = _hash(path)
     try:
@@ -200,7 +200,12 @@ def _parse_file(conn: sqlite3.Connection, workspace: Path, path: Path, suffix: s
             (relative, suffix, content_hash, "PARSE_FAILED", str(exc)),
         )
         return False
-    return _register_parsed(conn, relative, suffix, content_hash, root)
+    registered = _register_parsed(conn, relative, suffix, content_hash, root)
+    if embed_xml:
+        file_id = conn.execute("select id from model_files where path=?", (relative,)).fetchone()[0]
+        conn.execute("insert or replace into xml_documents(file_id,content,content_encoding,content_hash,content_size) values(?,?,?,?,?)",
+                     (file_id, path.read_bytes(), "UTF-8", content_hash, path.stat().st_size))
+    return registered
 
 
 def _register_parsed(conn: sqlite3.Connection, logical_path: str, suffix: str,
@@ -510,7 +515,7 @@ def refresh_scan_summary(summary: ScanSummary, db_path: Path | str) -> ScanSumma
     )
 
 
-def scan_workspace(workspace: Path | str, db_path: Path | str, fail_on_parse_error: bool = False) -> ScanSummary:
+def scan_workspace(workspace: Path | str, db_path: Path | str, fail_on_parse_error: bool = False, embed_xml: bool = False) -> ScanSummary:
     root = Path(workspace).resolve()
     _validate_workspace(root)
     files = sorted(discover_model_files(root), key=lambda item: item[0].as_posix())
@@ -533,7 +538,10 @@ def scan_workspace(workspace: Path | str, db_path: Path | str, fail_on_parse_err
         with conn:
             initialize_schema(conn, reset=True)
             for model_path, suffix in files:
-                _parse_file(conn, root, model_path, suffix)
+                if embed_xml:
+                    _parse_file(conn, root, model_path, suffix, True)
+                else:
+                    _parse_file(conn, root, model_path, suffix)
             _resolve_edges(conn)
             conn.execute("insert or replace into scan_state(id,workspace,scanner_version) values(1,?,?)", (str(root), SCANNER_VERSION))
         summary = _summary(conn, len(files))
@@ -609,7 +617,7 @@ def workspace_status(workspace: Path | str, db_path: Path | str) -> WorkspaceSta
         conn.close()
 
 
-def sync_workspace(workspace: Path | str, db_path: Path | str, fail_on_parse_error: bool = False) -> SyncSummary:
+def sync_workspace(workspace: Path | str, db_path: Path | str, fail_on_parse_error: bool = False, embed_xml: bool = False) -> SyncSummary:
     root = Path(workspace).resolve()
     _validate_workspace(root)
     conn = connect(db_path)
@@ -625,7 +633,10 @@ def sync_workspace(workspace: Path | str, db_path: Path | str, fail_on_parse_err
                 conn.execute("delete from model_files where path=?", (path,))
             for path in added + modified:
                 model_path, suffix, _ = discovered[path]
-                _parse_file(conn, root, model_path, suffix)
+                if embed_xml:
+                    _parse_file(conn, root, model_path, suffix, True)
+                else:
+                    _parse_file(conn, root, model_path, suffix)
             _resolve_edges(conn)
             conn.execute("insert or replace into scan_state(id,workspace,scanner_version) values(1,?,?)", (str(root), SCANNER_VERSION))
         stats = get_stats(conn)

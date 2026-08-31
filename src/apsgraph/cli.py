@@ -165,6 +165,7 @@ def _progress(message: str) -> None:
     print(f"[apsgraph] {message}", file=sys.stderr, flush=True)
 
 
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="apsgraph",

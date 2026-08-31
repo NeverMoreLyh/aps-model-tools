@@ -11,6 +11,7 @@
 | [Operations guide](docs/operations-guide.md) | Release, inspection, troubleshooting, performance, and rollback |
 | [Feature matrix](docs/feature-matrix.md) | Detailed capability status |
 | [DDL rules](docs/ddl-generation-rules.md) | Dialect-specific DDL generation rules |
+| [UI 原型设计](docs/ui-prototype-design.md) | 本地只读 Web 工作台信息架构与确认稿 |
 
 Read-only APS metadata scanner, compact SQLite relationship index, incremental sync, model-to-CodeGraph bridge, capability classification report, impact query, and Table-to-MySQL-DDL preview.
 

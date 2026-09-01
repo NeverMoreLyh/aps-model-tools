@@ -13,6 +13,7 @@
 | [DDL rules](docs/ddl-generation-rules.md) | Dialect-specific DDL generation rules |
 | [UI 原型设计](docs/ui-prototype-design.md) | 本地只读 Web 工作台信息架构与确认稿 |
 | [APS 元模型规则](docs/aps-metamodel-rules.md) | 核心概念、UML、顶层/普通模型、XML 规则与 Demo |
+| [APS 类型/数据库映射](docs/aps-type-database-mapping.md) | 基础类型递归解析与 MySQL/Oracle/PostgreSQL 列类型规则 |
 
 Read-only APS metadata scanner, compact SQLite relationship index, incremental sync, model-to-CodeGraph bridge, capability classification report, impact query, and Table-to-MySQL-DDL preview.
 

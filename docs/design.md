@@ -1,6 +1,6 @@
 # APSGraph 设计文档
 
-> 版本：0.16.0
+> 版本：0.18.0
 > 更新时间：2026-08-23  
 > 文档定位：说明 APSGraph 的关键架构、模块设计、数据模型、算法、并发模型、性能设计和安全边界。
 
@@ -76,10 +76,13 @@
 - 可选以 `xml_documents` 保存完整本地 XML，文件级关联 `file_id`。
 - 拒绝非 APS 索引数据库和跨 workspace 索引。
 
+### 3.6 APS 类型解析与数据库列映射
+
+字段必须沿 `type → RestrictionType/SubEnum → baseTypeObj → SimpleType` 递归解析，再选择目标数据库 renderer。完整的 MySQL/Oracle/PostgreSQL 映射、长度/精度、FTL 特殊修正和 APSGraph→dbm2 校准契约见 [`aps-type-database-mapping.md`](aps-type-database-mapping.md)。
+
 ### 3.5 分析模块
 
 | 模块 | 核心算法 |
-|---|---|
 | impact | 从目标节点反向 BFS，按深度限制收集影响路径 |
 | refs | 正向 / 反向 / 双向图遍历 |
 | ddl / ddlgen | 模型字段解析、类型映射、继承展开、方言模板 |
@@ -87,7 +90,7 @@
 | bridge | APS full_id 与生成 Java / CodeGraph 节点匹配 |
 | classify | 关键词与路径启发式分类 |
 
-## 3.5 原始 XML 与语义节点索引
+### 3.6 原始 XML 与语义节点索引
 
 扫描不采用“只保留顶层模型”或“每个 DOM 标签全部建节点”两种极端方案，而采用文件完整证据与语义投影分离：
 

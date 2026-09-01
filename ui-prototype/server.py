@@ -108,14 +108,15 @@ class Handler(BaseHTTPRequestHandler):
 
     def kinds(self):
         with self.with_db() as db:
-            rows = db.execute("select kind, count(*) as count from nodes group by kind order by count desc, kind").fetchall()
+            rows = db.execute("select n.kind, count(*) as count from nodes n where n.owner_node_id is null group by n.kind order by count desc, n.kind").fetchall()
             self.json([dict(row) for row in rows])
 
     def models(self, query):
         q = (query.get("q") or [""])[0].strip()
         kind = (query.get("kind") or [""])[0].strip()
         limit = min(int((query.get("limit") or [100])[0]), 500)
-        where, params = [], []
+        where = ["n.owner_node_id is null"]
+        params = []
         if q:
             where.append("(n.full_id like ? or n.raw_id like ? or n.stable_id like ? or f.path like ?)")
             like = f"%{q}%"
@@ -123,7 +124,10 @@ class Handler(BaseHTTPRequestHandler):
         if kind:
             where.append("n.kind=?")
             params.append(kind)
+        top_level = (query.get("top_level") or ["true"])[0].lower() == "true"
         clause = " where " + " and ".join(where) if where else ""
+        if top_level:
+            clause = " where n.owner_node_id is null" + (" and " + " and ".join(where) if where else "")
         sql = ("select n.id,n.stable_id,n.kind,n.raw_id,n.full_id,n.owner_node_id,"
                "f.path as file_path,n.file_id,n.xml_tag,n.properties_json "
                "from nodes n join model_files f on f.id=n.file_id" + clause +

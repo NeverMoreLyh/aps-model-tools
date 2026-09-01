@@ -33,9 +33,9 @@ FlowTran 工作台
 └── Batch Transaction：拆分、执行、合并
 ```
 
-## 页面原型
+## 5. 模型查询页面
 
-当前可运行原型为：
+前端模型查询只展示顶层模型（`nodes.owner_node_id IS NULL`），其定义是与物理 XML 文件绑定的 `ModelFileAware` 根对象；字段、参数、映射、流程节点等普通模型仅在顶层模型详情页中展示。
 
 ```text
 ui-prototype/server.py

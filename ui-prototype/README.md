@@ -28,11 +28,13 @@ apsgraph scan
 
 ## 当前页面
 
-- 结构化模型查询：full_id、raw_id、stable_id、文件路径、模型类型过滤；
+- 结构化模型查询：仅查询顶层模型（`owner_node_id IS NULL`），支持 full_id、raw_id、stable_id、文件路径、模型类型过滤；
 - FlowTran 工作台入口：第一版按 `FLOWTRAN` 类型筛选，详情 Tab 预留基本信息、结构节点、关系与血缘、原始 XML；
 - 模型详情：属性 JSON、直接子节点、关系/证据路径/置信度；
 - 原始 XML：仅读取索引关联的本地 XML，archive/external index 或 workspace 外路径显示不可用状态；
 - 统计卡片：文件、已解析文件、节点、关系、未解析引用；
+- `GET /api/kinds`：只统计顶层模型类型；
+- `GET /api/models`：只返回顶层模型（`owner_node_id IS NULL`）；
 - API：`/api/health`、`/api/stats`、`/api/kinds`、`/api/models`、`/api/models/{stable_id}`、`/api/xml/{stable_id}`。
 
 ## 已验证的 SQLite 边界

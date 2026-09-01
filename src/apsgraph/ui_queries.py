@@ -22,7 +22,8 @@ def _node(row: sqlite3.Row) -> Dict[str, Any]:
 
 def list_models(conn: sqlite3.Connection, query: str = "", kind: str = "", limit: int = 100) -> List[Dict[str, Any]]:
     limit = max(1, min(int(limit), 500))
-    where, params = [], []
+    where = ["n.owner_node_id is null"]
+    params = []
     if query:
         where.append("(n.full_id like ? or n.raw_id like ? or n.stable_id like ? or f.path like ?)")
         value = f"%{query}%"

@@ -68,7 +68,7 @@
 - 生成 dependency manifest。
 - 控制 staging DB 的原子发布。
 
-### 3.4 `apsgraph.store`
+### 3.3 `apsgraph.store`
 
 - SQLite schema 初始化与版本校验。
 - 只读连接和写连接隔离。
@@ -79,6 +79,10 @@
 ### 3.6 APS 类型解析与数据库列映射
 
 字段必须沿 `type → RestrictionType/SubEnum → baseTypeObj → SimpleType` 递归解析，再选择目标数据库 renderer。完整的 MySQL/Oracle/PostgreSQL 映射、长度/精度、FTL 特殊修正和 APSGraph→dbm2 校准契约见 [`aps-type-database-mapping.md`](aps-type-database-mapping.md)。
+
+### 3.7 APSGraph 与 dbm2 设计交叉验证
+
+`aps-metadata-db-mapping-cross-validation.md` 记录 APS XML/SQLite 到 dbm2 `TableMeta`、`ColumnMeta`、`IndexMeta` 的完整转换链、当前实现差距和后续校准契约。
 
 ### 3.5 分析模块
 

@@ -1,6 +1,6 @@
 # APS 元数据模型 → 数据库建表脚本：生成规则梳理
 
-> 版本：0.18.2
+> 版本：0.18.3
 
 > 依据 `aps-maven/aps-model-util` 源码与 FreeMarker 模板逆向整理，
 > 作为统一 DDL 生成工具（`apsgraph ddl-gen`）的实现基准。
@@ -56,14 +56,14 @@ Schema 中的 `restrictionType` 沿 `base` 递归到最底层 `SimpleType` 后�
 | int | `isUsed=true` 时 4 < n <= 6 | smallint | `smallint(6)` |
 | int | 默认 10；未触发 tiny/small 转换 | int | `int(10)` |
 | long | 默认 16 | bigint | `bigint(16)` |
-| dateTime | - | dateTime | `dateTime` |
+| dateTime | 默认无；显式 n | dateTime | `dateTime(3)` |
 | dateString8 | 默认 8 | date | `date(8)` |
 | date | - | date | `date` |
-| time | - | time | `time` |
+| time | 默认无；显式 n | time | `time(3)` |
 | double/decimal/amount | p,s；amount 默认 (20,2) | decimal | `decimal(20,2)` |
 | clob | - | text | `text` |
 | blob | - | blob | `blob` |
-| timestamp | - | timestamp | `timestamp` |
+| timestamp | 默认无；显式 n | timestamp | `timestamp(3)` |
 
 ### 方言家族与其他模板
 
@@ -91,10 +91,10 @@ Schema 中的 `restrictionType` 沿 `base` 递归到最底层 `SimpleType` 后�
 | boolean | 默认 1 | char | `char(1)` |
 | int/integer/double/long/decimal/amount | p,s；int 默认 (10)，long 默认 (16)，amount 默认 (20,2) | number | `number(20,2)` |
 | date/dateString8/time/dataTime | dateString8 默认 8 | date | `date(8)` |
-| timeString17 | - | timestamp | `timestamp` |
+| timeString17 | 默认无；显式 n | timestamp | `timestamp(3)` |
 | blob | - | blob | `blob` |
 | clob | - | clob | `clob` |
-| timestamp | - | timestamp | `timestamp` |
+| timestamp | 默认无；显式 n | timestamp | `timestamp(3)` |
 
 ### PostgreSQL
 | 基础类型 | 长度条件 | PG 类型 | 示例 |
@@ -103,15 +103,34 @@ Schema 中的 `restrictionType` 沿 `base` 递归到最底层 `SimpleType` 后�
 | eString/encString/cString/dateString/string/schema | n >= 1000 | text | `text` |
 | fixString | n | char | `char(1)` |
 | boolean | - | boolean | `boolean` |
-| int | - | integer | `integer` |
-| long | - | bigint | `bigint` |
-| dateTime | - | timestamp | `timestamp` |
-| date/dateString8 | dateString8 默认 8 | date | `date(8)` |
-| time | - | time | `time` |
+| int | 默认无；显式 n | integer | `integer(10)` |
+| long | 默认无；显式 n | bigint | `bigint(19)` |
+| dateTime | 默认无；显式 n | timestamp | `timestamp(3)` |
+| date/dateString8 | dateString8 默认 8；显式 n | date | `date(8)` |
+| time | 默认无；显式 n | time | `time(3)` |
 | double/decimal/amount | p,s；默认 (20,2) | decimal | `decimal(20,2)` |
-| clob | - | text | `text` |
-| blob | - | bytea | `bytea` |
-| timestamp | - | timestamp | `timestamp` |
+| clob | 最终为 text 时省略 | text | `text` |
+| blob | 默认无；显式 n | bytea | `bytea(1024)` |
+| timestamp | 默认无；显式 n | timestamp | `timestamp(3)` |
+
+### 三大方言的逐类型长度行为汇总
+
+| 类型类别 | 显式设置长度/精度 | 未设置长度 | 最终类型转换/示例 |
+|---|---|---|---|
+| 字符串：`eString`、`encString`、`cString`、`string`、`schema` | 生成 `类型(n)`；`byCharacter=true` 时先乘 `DBRATIO` | 使用方言默认值：MySQL/Oracle `string=(255)`、PG `string=(255)`、`schema=(255)` | MySQL/PG `n < 1000` 为 `varchar(n)`，`n >= 1000` 为 `text`；Oracle `n <= 4000` 为 `varchar2(n)`，`n > 4000` 为 `clob` |
+| `dateString` | 生成 `varchar(n)` / `varchar2(n)` 及对应长度 | MySQL/Oracle/PG 默认 `(8)`（按映射表） | MySQL/PG 达阈值时转 `text`；Oracle 超过 4000 转 `clob` |
+| `fixString` | `char(n)` | 无默认长度 | 不做二次转换，例如 `char(1)` |
+| `boolean` | `char(n)`（MySQL/Oracle）；PG 会拼接为 `boolean(n)` | MySQL/Oracle 默认 `(1)`；PG 无默认 | 不做二次转换 |
+| `int` / `integer` | MySQL/Oracle/PG 都会拼接显式 `(n)`；MySQL `isUsed=true` 时 n≤4/≤6 转 `tinyint`/`smallint` | MySQL 默认 `int(10)`；Oracle 默认 `number(10)`；PG 无默认 | 例如 `int(10)`、`number(10)`、`integer(10)` |
+| `long` | 显式 `(n)`；可带精度形成 `(n,s)` | MySQL 默认 `bigint(16)`；Oracle 默认 `number(16)`；PG 无默认 | 例如 `bigint(19)`、`number(19)`、`bigint(19)` |
+| `double` / `decimal` / `amount` | 显式 `(p,s)` | MySQL/Oracle 只有 `amount` 默认 `(20,2)`；PG 三者默认 `(20,2)` | `decimal(p,s)` 或 Oracle `number(p,s)` |
+| `date` / `dateString8` / `dataTime` | 显式长度会被直接拼接 | `dateString8` 使用 `(8)`；其余通常无默认 | 例如 `date(8)`；生成器不校验数据库是否接受该长度 |
+| `time` / `timeString17` | 显式长度会被直接拼接 | 通常无默认 | 例如 `time(3)`、Oracle `timestamp(3)` |
+| `dateTime` / `timestamp` | 显式长度会被直接拼接，精度也可能形成 `(n,s)` | 通常无默认 | 例如 `timestamp(3)`；MySQL 的 `dateTime` 映射值按源码为 `dateTime` |
+| `clob` | MySQL/PG 最终为 `text`，Oracle 为 `clob`；模板对 `text/clob` 省略长度 | 无默认 | `text` / `clob` |
+| `blob` | 显式长度会被直接拼接 | 无默认 | 例如 MySQL `blob(1024)`、PG `bytea(1024)`；生成器不做合法性校验 |
+
+> 重要：`fieldFraction` 或 `dbFractionDigits` 生效时，通用长度函数会对所有类型追加 `,s`，不只限于 decimal；例如可能生成 `timestamp(3,6)`。这属于模板/辅助方法的原样输出行为，不代表数据库语法一定合法。
 
 ### 二次特殊转换（模板内调用）
 | 数据库 | 方法 | 规则 |

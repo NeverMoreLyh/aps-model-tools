@@ -1,9 +1,11 @@
 # APS 元数据模型 → 数据库建表脚本：生成规则梳理
 
-> 依据 `aps-maven-6.51.16-RELEASE/apsgraph-util` 源码与 FreeMarker 模板逆向整理，
+> 版本：0.18.1
+
+> 依据 `aps-maven/aps-model-util` 源码与 FreeMarker 模板逆向整理，
 > 作为统一 DDL 生成工具（`apsgraph ddl-gen`）的实现基准。
 >
-> 模板路径：`apsgraph-util/src/main/resources/cn/sunline/ltts/frw/model/generator/sql/`
+> 模板路径：`aps-maven/aps-model-util/src/main/resources/cn/sunline/ltts/frw/model/generator/sql/`
 > Java 入口：`cn.sunline.ltts.frw.model.generator.sql.DdlGenerator` / `TableDdlUtil`
 
 ## 1. 生成管线总览
@@ -41,6 +43,8 @@ Schema(types) → List<Table> → FreeMarker 模板(<dbtype>.ftl + sql_macro.ftl
 
 ## 3. 类型映射（TableDdlUtil 静态映射表，原样摘录）
 
+Schema 中的 `restrictionType` 沿 `base` 递归到最底层 `SimpleType` 后再映射；枚举限制类型继承基础类型，不生成数据库原生 enum 类型。源码中可作为基础类型的名称包括：`eString`、`encString`、`cString`、`fixString`、`string`、`dateString`、`dateString8`、`timeString17`、`boolean`、`int`、`integer`、`long`、`dateTime`、`dataTime`、`date`、`time`、`timestamp`、`double`、`decimal`、`amount`、`schema`、`clob`、`blob`。
+
 ### MySQL（tdsql/oceanbase 同表）
 | 基础类型 | MySQL 类型 | 默认长度(mysqlLength) |
 |---|---|---|
@@ -56,6 +60,23 @@ Schema(types) → List<Table> → FreeMarker 模板(<dbtype>.ftl + sql_macro.ftl
 | clob | text | — |
 | blob | blob | — |
 | timestamp | timestamp | — |
+
+### 方言家族与其他模板
+
+| 方言/模板 | 类型映射来源 | 支持结论 |
+|---|---|---|
+| `tdsql`、`oceanbase` | 复用 MySQL 映射和 MySQL 二次转换 | MySQL 家族等价支持 |
+| `gaussdb` | 复用 Oracle 映射和 Oracle 二次转换 | Oracle 家族等价支持 |
+| `goldendb` | 独立映射，基本等同 MySQL | 可生成，按 GoldenDB 映射表执行 |
+| `db2` | 独立映射，覆盖字符串、数值、日期时间、`blob` | 可生成；未命中类型按原名透传 |
+| `db2as400` | 使用 DB2 模板链 | 可生成；类型能力以 DB2 映射为准 |
+| `sybase` | 模板内局部 `userTypeMap` | 有限支持；不能视为完整类型覆盖 |
+| `hsql` | 模板内局部 `userTypeMap` | 有限支持；模板局部映射优先 |
+| `sqlserver` | 独立映射（`nvarchar`、`datetime2`、`bit`、`varbinary(max)` 等） | 可生成，但不是 APSGraph 三主方言 |
+| `trafodion` | 无同名 SQL 模板和独立映射 | 未覆盖 |
+| `unknown` | 无可靠方言转换 | 仅兜底透传，不能视为兼容性支持 |
+
+部分方言映射表未包含全部基础类型；`baseTypeToDbType` 在未命中时回退为基础类型原名，因此文档将这类结果标记为“原样透传”。
 
 ### Oracle（gaussdb 同表）
 | 基础类型 | Oracle 类型 | 默认长度(oracleLength) |

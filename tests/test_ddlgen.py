@@ -6,7 +6,7 @@ import unittest
 import zipfile
 from pathlib import Path
 
-from apsgraph.ddlgen import DdlGenConfig, generate_all_ddl
+from apsgraph.ddlgen import DEFAULT_FACETS, DdlGenConfig, TYPE_BASE, generate_all_ddl
 from apsgraph.scanner import import_jar_models, scan_workspace
 from apsgraph.store import connect
 
@@ -63,6 +63,19 @@ class DdlGenTest(unittest.TestCase):
 
     def tearDown(self):
         self.tmp.cleanup()
+
+    def test_supported_base_type_mappings_match_aps_generator(self):
+        self.assertEqual(TYPE_BASE["mysql"]["string"], "varchar")
+        self.assertEqual(TYPE_BASE["mysql"]["long"], "bigint")
+        self.assertEqual(TYPE_BASE["mysql"]["blob"], "blob")
+        self.assertEqual(TYPE_BASE["oracle"]["int"], "number")
+        self.assertEqual(TYPE_BASE["oracle"]["timeString17"], "timestamp")
+        self.assertEqual(TYPE_BASE["postgresql"]["boolean"], "boolean")
+        self.assertEqual(TYPE_BASE["postgresql"]["blob"], "bytea")
+        self.assertEqual(DEFAULT_FACETS["mysql"]["amount"],
+                         {"maxLength": 20, "fractionDigits": 2})
+        self.assertEqual(DEFAULT_FACETS["postgresql"]["decimal"],
+                         {"maxLength": 20, "fractionDigits": 2})
 
     def _generate(self, dialect):
         conn = connect(self.db, read_only=True)

@@ -1,6 +1,6 @@
 # APS 元数据模型 → 数据库建表脚本：生成规则梳理
 
-> 版本：0.18.1
+> 版本：0.18.2
 
 > 依据 `aps-maven/aps-model-util` 源码与 FreeMarker 模板逆向整理，
 > 作为统一 DDL 生成工具（`apsgraph ddl-gen`）的实现基准。
@@ -46,20 +46,24 @@ Schema(types) → List<Table> → FreeMarker 模板(<dbtype>.ftl + sql_macro.ftl
 Schema 中的 `restrictionType` 沿 `base` 递归到最底层 `SimpleType` 后再映射；枚举限制类型继承基础类型，不生成数据库原生 enum 类型。源码中可作为基础类型的名称包括：`eString`、`encString`、`cString`、`fixString`、`string`、`dateString`、`dateString8`、`timeString17`、`boolean`、`int`、`integer`、`long`、`dateTime`、`dataTime`、`date`、`time`、`timestamp`、`double`、`decimal`、`amount`、`schema`、`clob`、`blob`。
 
 ### MySQL（tdsql/oceanbase 同表）
-| 基础类型 | MySQL 类型 | 默认长度(mysqlLength) |
-|---|---|---|
-| eString/encString/cString/dateString/string/schema | varchar | string=(255) schema=(255) |
-| fixString | char | — |
-| boolean | char | boolean=(1) |
-| int | int | int=(10) |
-| long | bigint | long=(16) |
-| dateTime | dateTime | — |
-| date / dateString8 | date | dateString=(8) |
-| time | time | — |
-| double/decimal/amount | decimal | amount=(20,2) |
-| clob | text | — |
-| blob | blob | — |
-| timestamp | timestamp | — |
+| 基础类型 | 长度条件 | MySQL 类型 | 示例 |
+|---|---|---|---|
+| eString/encString/cString/dateString/string/schema | n < 1000 | varchar | `varchar(500)` |
+| eString/encString/cString/dateString/string/schema | n >= 1000 | text | `text` |
+| fixString | n | char | `char(1)` |
+| boolean | 默认 1 | char | `char(1)` |
+| int | 默认 10；`isUsed=true` 时 n <= 4 | tinyint | `tinyint(4)` |
+| int | `isUsed=true` 时 4 < n <= 6 | smallint | `smallint(6)` |
+| int | 默认 10；未触发 tiny/small 转换 | int | `int(10)` |
+| long | 默认 16 | bigint | `bigint(16)` |
+| dateTime | - | dateTime | `dateTime` |
+| dateString8 | 默认 8 | date | `date(8)` |
+| date | - | date | `date` |
+| time | - | time | `time` |
+| double/decimal/amount | p,s；amount 默认 (20,2) | decimal | `decimal(20,2)` |
+| clob | - | text | `text` |
+| blob | - | blob | `blob` |
+| timestamp | - | timestamp | `timestamp` |
 
 ### 方言家族与其他模板
 
@@ -79,32 +83,35 @@ Schema 中的 `restrictionType` 沿 `base` 递归到最底层 `SimpleType` 后�
 部分方言映射表未包含全部基础类型；`baseTypeToDbType` 在未命中时回退为基础类型原名，因此文档将这类结果标记为“原样透传”。
 
 ### Oracle（gaussdb 同表）
-| 基础类型 | Oracle 类型 | 默认长度(oracleLength) |
-|---|---|---|
-| eString/encString/cString/dateString/string/schema | varchar2 | string=(255) schema=(255) |
-| fixString | char | — |
-| boolean | char | boolean=(1) |
-| int/integer/double/long/decimal/amount | number | int=(10) long=(16) amount=(20,2) |
-| date / dateString8 / time / dataTime | date | dateString=(8) |
-| timeString17 | timestamp | — |
-| blob/clob | blob/clob | — |
-| timestamp | timestamp | — |
+| 基础类型 | 长度条件 | Oracle 类型 | 示例 |
+|---|---|---|---|
+| eString/encString/cString/dateString/string/schema | n <= 4000 | varchar2 | `varchar2(500)` |
+| eString/encString/cString/dateString/string/schema | n > 4000 | clob | `clob` |
+| fixString | n | char | `char(1)` |
+| boolean | 默认 1 | char | `char(1)` |
+| int/integer/double/long/decimal/amount | p,s；int 默认 (10)，long 默认 (16)，amount 默认 (20,2) | number | `number(20,2)` |
+| date/dateString8/time/dataTime | dateString8 默认 8 | date | `date(8)` |
+| timeString17 | - | timestamp | `timestamp` |
+| blob | - | blob | `blob` |
+| clob | - | clob | `clob` |
+| timestamp | - | timestamp | `timestamp` |
 
 ### PostgreSQL
-| 基础类型 | PG 类型 | 默认长度(postgresqlLength) |
-|---|---|---|
-| eString/encString/cString/dateString/string/schema | varchar | string=(255) schema=(255) |
-| fixString | char | — |
-| boolean | boolean | — |
-| int | integer | — |
-| long | bigint | — |
-| dateTime | timestamp | — |
-| date / dateString8 | date | dateString=(8) |
-| time | time | — |
-| double/decimal/amount | decimal | decimal=(20,2) double=(20,2) amount=(20,2) |
-| clob | text | — |
-| blob | bytea | — |
-| timestamp | timestamp | — |
+| 基础类型 | 长度条件 | PG 类型 | 示例 |
+|---|---|---|---|
+| eString/encString/cString/dateString/string/schema | n < 1000 | varchar | `varchar(500)` |
+| eString/encString/cString/dateString/string/schema | n >= 1000 | text | `text` |
+| fixString | n | char | `char(1)` |
+| boolean | - | boolean | `boolean` |
+| int | - | integer | `integer` |
+| long | - | bigint | `bigint` |
+| dateTime | - | timestamp | `timestamp` |
+| date/dateString8 | dateString8 默认 8 | date | `date(8)` |
+| time | - | time | `time` |
+| double/decimal/amount | p,s；默认 (20,2) | decimal | `decimal(20,2)` |
+| clob | - | text | `text` |
+| blob | - | bytea | `bytea` |
+| timestamp | - | timestamp | `timestamp` |
 
 ### 二次特殊转换（模板内调用）
 | 数据库 | 方法 | 规则 |

@@ -10,6 +10,7 @@ import argparse
 import json
 import os
 import re
+import random
 import shutil
 import sqlite3
 import subprocess
@@ -59,9 +60,42 @@ def rg_count(workspace: Path, pattern: str) -> int:
     return len([line for line in proc.stdout.splitlines() if line.strip()])
 
 
-def choose_samples(db: Path) -> dict:
+def rg_terms(workspace: Path, terms: list[str]) -> set[str]:
+    """Use raw rg to prove sampled terms occur in source XML."""
+    fd, raw_path = tempfile.mkstemp(prefix="apsgraph-rg-patterns-")
+    os.close(fd)
+    pattern_file = Path(raw_path)
+    try:
+        pattern_file.write_text("\n".join(terms) + "\n", encoding="utf-8")
+        proc = subprocess.run(
+            ["rg", "-F", "-o", "-f", str(pattern_file), "--glob", "*.xml", str(workspace)],
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        return {line.rsplit(":", 1)[-1] for line in proc.stdout.splitlines() if line.strip()}
+    finally:
+        pattern_file.unlink(missing_ok=True)
+
+
+def choose_samples(db: Path, seed: int, per_kind: int = 20) -> dict:
     conn = sqlite3.connect(db)
     conn.row_factory = sqlite3.Row
+    rng = random.Random(seed)
+    by_kind = {}
+    rows = conn.execute("""
+        select n.kind, n.raw_id, n.full_id, n.stable_id, f.path
+        from nodes n join model_files f on f.id=n.file_id
+        where n.raw_id is not null and length(n.raw_id)>=2
+        order by n.kind, n.id
+    """).fetchall()
+    for row in rows:
+        by_kind.setdefault(row["kind"], []).append(dict(row))
+    sampled_by_kind = {}
+    for kind, kind_rows in by_kind.items():
+        rng.shuffle(kind_rows)
+        unique = {}
+        for row in kind_rows:
+            unique.setdefault(row["raw_id"], row)
+        sampled_by_kind[kind] = list(unique.values())[:per_kind]
     table = conn.execute("""
         select n.raw_id, n.full_id, n.stable_id, f.path
         from nodes n join model_files f on f.id=n.file_id
@@ -93,6 +127,9 @@ def choose_samples(db: Path) -> dict:
         group by n.raw_id having count(*)=1 order by length(n.raw_id), n.raw_id limit 1
     """).fetchone()
     result = {
+        "seed": seed,
+        "per_kind": per_kind,
+        "by_kind": sampled_by_kind,
         "table": dict(table) if table else None,
         "search": unique_search[0] if unique_search else None,
         "ref": dict(ref) if ref else None,
@@ -100,7 +137,7 @@ def choose_samples(db: Path) -> dict:
         "schema": dict(schema) if schema else None,
     }
     conn.close()
-    if not all(result.values()):
+    if not all(result[k] for k in ("table", "search", "ref", "type", "schema")):
         raise AssertionError(f"unable to choose real metadata samples: {result}")
     return result
 
@@ -110,6 +147,7 @@ def main() -> int:
     parser.add_argument("--workspace", type=Path, default=DEFAULT_WORKSPACE)
     parser.add_argument("--report", type=Path)
     parser.add_argument("--keep-db", action="store_true")
+    parser.add_argument("--seed", type=int, help="random seed; default: current Unix time")
     args = parser.parse_args()
     workspace = args.workspace.resolve()
     if not workspace.is_dir():
@@ -127,7 +165,8 @@ def main() -> int:
         results.append(stats)
         if not isinstance(stats["json"], dict) or stats["json"].get("nodes", 0) < 100000:
             raise AssertionError(f"unexpected real graph size: {stats['json']}")
-        samples = choose_samples(db)
+        seed = args.seed if args.seed is not None else int(time.time())
+        samples = choose_samples(db, seed)
         table = samples["table"]
         search_token = samples["search"]
         ref = samples["ref"]
@@ -154,6 +193,34 @@ def main() -> int:
             require(result, label)
             results.append({"label": label, **result})
 
+        # Run the real fuzzy-search CLI for 20 random samples per metadata kind
+        # (or all available samples when a kind has fewer than 20 distinct IDs).
+        random_searches = []
+        search_terms = []
+        for kind, kind_samples in sorted(samples["by_kind"].items()):
+            for sample in kind_samples:
+                term = sample["raw_id"]
+                search_terms.append(term)
+                result = run_cmd(["search", "--db", str(db), "--limit", "20", term], timeout=600)
+                require(result, f"search_sample:{kind}:{term}")
+                payload = result["json"]
+                matches = payload.get("results") if isinstance(payload, dict) else None
+                if not matches:
+                    raise AssertionError(f"empty fuzzy search result for {kind}:{term}")
+                random_searches.append({
+                    "kind": kind,
+                    "raw_id": term,
+                    "stable_id": sample["stable_id"],
+                    "elapsed_seconds": result["elapsed_seconds"],
+                    "result_count": len(matches),
+                })
+        results.append({
+            "label": "search_random_20_per_kind",
+            "sample_count": len(random_searches),
+            "by_kind": {kind: len(rows) for kind, rows in samples["by_kind"].items()},
+            "samples": random_searches,
+        })
+
         # db-diff is tested separately below with a minimal valid offline schema.
         (temp_root / "empty-actual.json").write_text(json.dumps({"tables": []}), encoding="utf-8")
         dbdiff = run_cmd(["db-diff", "--db", str(db), "--dialect", "mysql", "--actual-json", str(temp_root / "empty-actual.json"), "--output-json", str(temp_root / "dbdiff.json")])
@@ -167,6 +234,9 @@ def main() -> int:
 
         # Raw XML cross-validation: search terms and reference targets must occur in XML,
         # and the graph's reference evidence must have a source file.
+        matched_terms = rg_terms(workspace, sorted(set(search_terms + [ref["raw_target"], type_node["raw_id"]])))
+        all_cross_terms = set(search_terms + [ref["raw_target"], type_node["raw_id"]])
+        missing_terms = sorted(term for term in all_cross_terms if term not in matched_terms and rg_count(workspace, term) < 1)
         cross = {
             "search_token": search_token,
             "search_xml_file_count": rg_count(workspace, search_token),
@@ -175,8 +245,11 @@ def main() -> int:
             "reference_evidence_file": ref["path"],
             "type_raw_id": type_node["raw_id"],
             "type_xml_file_count": rg_count(workspace, type_node["raw_id"]),
+            "random_search_terms": len(set(search_terms)),
+            "random_search_terms_rg_matched": len(set(search_terms) & matched_terms),
+            "random_search_terms_rg_missing": missing_terms,
         }
-        if cross["search_xml_file_count"] < 1 or cross["reference_target_xml_file_count"] < 1 or cross["type_xml_file_count"] < 1:
+        if cross["search_xml_file_count"] < 1 or cross["reference_target_xml_file_count"] < 1 or cross["type_xml_file_count"] < 1 or missing_terms:
             raise AssertionError(f"ripgrep cross-validation failed: {cross}")
 
         payload = {

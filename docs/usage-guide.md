@@ -351,7 +351,11 @@ python3 scripts/acceptance_v87.py \\
   --report /Users/joshua/Documents/YYYY-MM-DD/apsgraph-v87-acceptance.json
 ```
 
-该测试会从真实 XML 重建临时 SQLite 索引，测试所有公开 CLI，并记录每个命令的退出码、耗时和输出；同时使用 `rg` 直接检索原始 XML，对模型搜索、引用目标和类型 ID 做交叉验证。在 `db-diff` 离线模式下，真实 v8.7-all 当前存在模型自身的未解析扩展、类型或索引问题时，命令可以按契约返回非零并生成 ERROR/WARNING 报告；验收集会校验报告结构和错误发现，不会把真实模型错误伪装成通过。
+该测试会从真实 XML 重建临时 SQLite 索引，测试所有公开 CLI，并记录每个命令的退出码、耗时和输出；每种节点类型最多随机抽取 20 个不同 `raw_id`，少于 20 个的类型全部覆盖，并逐一调用真实 `search` CLI；同时使用 `rg` 直接检索原始 XML，对全部抽样词、引用目标和类型 ID 做交叉验证。在 `db-diff` 离线模式下，真实 v8.7-all 当前存在模型自身的未解析扩展、类型或索引问题时，命令可以按契约返回非零并生成 ERROR/WARNING 报告；验收集会校验报告结构和错误发现，不会把真实模型错误伪装成通过。
+
+### 6.7 随机覆盖测试集
+
+抽样规则和结果说明见 `/Users/joshua/Documents/YYYY-MM-DD/apsgraph-v87-random-acceptance.md`。
 
 ---
 

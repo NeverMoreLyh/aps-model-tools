@@ -47,6 +47,23 @@ def run_cmd(args: list[str], cwd: Path | None = None, timeout: int = 300) -> dic
     return {"args": args, "exit_code": proc.returncode, "elapsed_seconds": round(elapsed, 3), "output": output, "json": parsed}
 
 
+def run_mcp(db: Path, workspace: Path, requests: list[dict], timeout: int = 300):
+    started = time.perf_counter()
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(SRC)
+    proc = subprocess.run(
+        [sys.executable, "-m", "apsgraph", "serve-mcp", "--db", str(db)],
+        cwd=ROOT, env=env,
+        input="\n".join(json.dumps(item, ensure_ascii=False) for item in requests) + "\n",
+        text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout,
+    )
+    output = proc.stdout
+    parsed = [json.loads(line) for line in output.splitlines() if line.strip()]
+    return {"args": ["apsgraph", "serve-mcp", "--db", str(db), "--workspace", str(workspace)], "exit_code": proc.returncode,
+            "elapsed_seconds": round(time.perf_counter() - started, 3),
+            "output": output, "json": parsed, "stderr": proc.stderr}
+
+
 def require(result: dict, label: str) -> None:
     if result["exit_code"] != 0:
         raise AssertionError(f"{label} failed: {result['output'][-2000:]}")
@@ -97,7 +114,7 @@ def choose_samples(db: Path, seed: int, per_kind: int = 20) -> dict:
             unique.setdefault(row["raw_id"], row)
         sampled_by_kind[kind] = list(unique.values())[:per_kind]
     table = conn.execute("""
-        select n.raw_id, n.full_id, n.stable_id, f.path
+        select n.kind, n.raw_id, n.full_id, n.stable_id, f.path
         from nodes n join model_files f on f.id=n.file_id
         where n.kind='TABLE' and n.owner_node_id is not null
         group by n.full_id having count(*)=1 order by length(n.raw_id), n.raw_id limit 1
@@ -108,20 +125,20 @@ def choose_samples(db: Path, seed: int, per_kind: int = 20) -> dict:
         group by raw_id having count(*)=1 order by length(raw_id), raw_id limit 1
     """).fetchone()
     ref = conn.execute("""
-        select n.raw_id, n.full_id, n.stable_id, f.path, e.relation_kind, e.raw_target
+        select n.kind, n.raw_id, n.full_id, n.stable_id, f.path, e.relation_kind, e.raw_target
         from nodes n join edges e on e.to_node_id=n.id join model_files f on f.id=n.file_id
         where n.raw_id is not null and e.raw_target is not null
         order by length(n.raw_id), n.raw_id limit 1
     """).fetchone()
     type_node = conn.execute("""
-        select n.raw_id, n.full_id, n.stable_id, f.path
+        select n.kind, n.raw_id, n.full_id, n.stable_id, f.path
         from nodes n join model_files f on f.id=n.file_id
         where n.kind in ('RESTRICTION_TYPE','SUBENUM','DICTIONARY','COMPLEX_TYPE')
           and n.raw_id is not null
         group by n.raw_id having count(*)=1 order by n.kind, length(n.raw_id), n.raw_id limit 1
     """).fetchone()
     schema = conn.execute("""
-        select n.raw_id, n.full_id, n.stable_id, f.path
+        select n.kind, n.raw_id, n.full_id, n.stable_id, f.path
         from nodes n join model_files f on f.id=n.file_id
         where n.kind='SCHEMA' and n.owner_node_id is null
         group by n.raw_id having count(*)=1 order by length(n.raw_id), n.raw_id limit 1
@@ -201,7 +218,7 @@ def main() -> int:
             for sample in kind_samples:
                 term = sample["raw_id"]
                 search_terms.append(term)
-                result = run_cmd(["search", "--db", str(db), "--limit", "20", term], timeout=600)
+                result = run_cmd(["search", "--db", str(db), "--limit", "20", term] + (["--kind", kind] if kind in {"TABLE", "FIELD", "ELEMENT", "SCHEMA"} else []), timeout=600)
                 require(result, f"search_sample:{kind}:{term}")
                 payload = result["json"]
                 matches = payload.get("results") if isinstance(payload, dict) else None
@@ -220,6 +237,28 @@ def main() -> int:
             "by_kind": {kind: len(rows) for kind, rows in samples["by_kind"].items()},
             "samples": random_searches,
         })
+
+        mcp_requests = [
+            {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+            {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+            {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {
+                "name": "search_metadata", "arguments": {"query": search_token, "kinds": [table["kind"]], "limit": 5}
+            }},
+            {"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {
+                "name": "find_entity", "arguments": {"query": table["stable_id"], "kinds": ["TABLE"]}
+            }},
+            {"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {
+                "name": "find_unresolved_references", "arguments": {"limit": 5}
+            }},
+        ]
+        mcp_result = run_mcp(db, workspace, mcp_requests, timeout=600)
+        if mcp_result["exit_code"] != 0 or len(mcp_result["json"]) != len(mcp_requests):
+            raise AssertionError(f"MCP stdio protocol failed: {mcp_result}")
+        if len(mcp_result["json"][1]["result"]["tools"]) < 7:
+            raise AssertionError("MCP tools/list returned fewer than seven tools")
+        if mcp_result["json"][3]["result"]["structuredContent"]["count"] != 1:
+            raise AssertionError("MCP scoped find_entity did not isolate the table")
+        results.append({"label": "mcp_stdio_e2e", **mcp_result})
 
         # db-diff is tested separately below with a minimal valid offline schema.
         (temp_root / "empty-actual.json").write_text(json.dumps({"tables": []}), encoding="utf-8")

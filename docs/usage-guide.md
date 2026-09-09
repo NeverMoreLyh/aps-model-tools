@@ -1,6 +1,6 @@
 # APSGraph 使用说明
 
-> 版本：0.18.6
+> 版本：0.18.7
 > 更新时间：2026-08-23
 > 项目地址：https://github.com/NeverMoreLyh/aps-model-tools
 
@@ -164,7 +164,15 @@ apsgraph search "开户" --limit 20
 apsgraph search "account_type" --db .apsgraph/apsgraph.db
 ```
 
-每条结果包含 `kind`、`full_id`、`chinese_name`、`description`、`matched_fields`、文件路径及节点属性。
+`search` 和 `find` 均支持范围过滤：
+
+```bash
+apsgraph search "编码" --kind FIELD --project dept-parent --module dept-bcs --path '*/src/main/resources/tables/**' --limit 20
+apsgraph find 'account_type' --kind TABLE --file 'Account.tables.xml'
+```
+
+可用过滤项：`--kind`（可重复）、`--project`、`--module`、`--path`（SQLite glob）、`--file`、`--owner`、`--top-level`。
+
 
 ### 5.8 refs — 引用关系查询
 
@@ -356,6 +364,44 @@ python3 scripts/acceptance_v87.py \\
 ### 6.7 随机覆盖测试集
 
 抽样规则和结果说明见 `/Users/joshua/Documents/YYYY-MM-DD/apsgraph-v87-random-acceptance.md`。
+
+### 6.8 Metadata Graph MCP
+
+启动 stdio MCP：
+
+```bash
+apsgraph serve-mcp \\
+  --db /path/to/.apsgraph/apsgraph.db \\
+  --workspace /path/to/workspace
+```
+
+MCP 工具：
+
+```text
+search_metadata
+find_entity
+find_references
+get_dependencies
+get_impact
+find_unresolved_references
+get_entity_source
+```
+
+MCP 范围参数：
+
+```json
+{
+  "query": "编码",
+  "kinds": ["FIELD", "ELEMENT"],
+  "project": "dept-parent",
+  "module": "dept-bcs",
+  "path": "*/src/main/resources/tables/**",
+  "top_level": false,
+  "limit": 20
+}
+```
+
+
 
 ---
 

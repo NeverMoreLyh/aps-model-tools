@@ -14,12 +14,14 @@ from .ddl import generate_table_ddl
 from .ddlgen import DdlGenConfig, generate_all_ddl
 from .docx import DocExportReport, export_document
 from .impact import build_impact_report
+from .mcp_server import serve_stdio
 from .scanner import (
     scan_workspace,
     scan_workspace_with_external_indexes,
     sync_workspace,
     workspace_status,
 )
+from .search_scope import SearchScope
 from .store import connect, find_nodes, get_stats, references, search_nodes
 from .xlsx_export import ExcelExportReport, export_excel
 
@@ -60,6 +62,26 @@ DEFAULT_OPTIONS = {
     "database": str(DEFAULT_DB),
     "external_indexes": [],
 }
+
+
+def _add_scope_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--kind", action="append", default=[], metavar="KIND",
+                        help="metadata node kind; repeatable")
+    parser.add_argument("--project", help="project path segment")
+    parser.add_argument("--module", help="module path segment")
+    parser.add_argument("--path", dest="path_glob", help="model file path glob")
+    parser.add_argument("--file", help="relative path or basename")
+    parser.add_argument("--owner", help="owner stable_id/full_id/raw_id")
+    parser.add_argument("--top-level", action="store_true", help="only nodes with no owner")
+
+
+def _scope(args: argparse.Namespace) -> SearchScope:
+    return SearchScope.from_values(
+        kinds=getattr(args, "kind", []), project=getattr(args, "project", None),
+        module=getattr(args, "module", None), path=getattr(args, "path_glob", None),
+        file=getattr(args, "file", None), owner=getattr(args, "owner", None),
+        top_level=getattr(args, "top_level", False),
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -110,6 +132,13 @@ def build_parser() -> argparse.ArgumentParser:
     search.add_argument("query")
     search.add_argument("--db", type=Path, default=DEFAULT_DB)
     search.add_argument("--limit", type=_positive_limit, default=50)
+    _add_scope_arguments(search)
+
+    find = sub.add_parser("find", help="exact-search stable_id, full_id, or raw_id with optional scope")
+    find.add_argument("query")
+    find.add_argument("--db", type=Path, default=DEFAULT_DB)
+    find.add_argument("--limit", type=_positive_limit, default=50)
+    _add_scope_arguments(find)
 
     refs = sub.add_parser("refs")
     refs.add_argument("query")
@@ -205,6 +234,9 @@ def build_parser() -> argparse.ArgumentParser:
                           "error_code, batch_tran")
     xls.add_argument("--projects", nargs="*", default=[],
                      help="filter to specific project names (e.g. ap-parent aggr-parent)")
+    mcp = sub.add_parser("serve-mcp", help="serve Metadata Graph tools over stdio MCP")
+    mcp.add_argument("--db", type=Path, default=DEFAULT_DB)
+    mcp.add_argument("--workspace", type=Path, default=DEFAULT_WORKSPACE)
     return parser
 
 
@@ -286,6 +318,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             summary = sync_workspace(args.workspace, args.db, args.fail_on_parse_error)
             _json(asdict(summary))
             return 0
+        if args.command == "serve-mcp":
+            return serve_stdio(args.db, args.workspace)
         if args.command == "status":
             _json(asdict(workspace_status(args.workspace, args.db)))
             return 0
@@ -437,7 +471,6 @@ def main(argv: Optional[List[str]] = None) -> int:
             try:
                 expected, ddl_errors = expected_schema_from_db(conn, dialect, cfg)
                 if args.tables:
-                    from .store import find_nodes
                     wanted = set()
                     for q in args.tables:
                         for n in find_nodes(conn, q):
@@ -486,8 +519,13 @@ def main(argv: Optional[List[str]] = None) -> int:
                 node["relations"] = references(conn, node["stable_id"], "both", 1)
                 _json(node)
             elif args.command == "search":
-                results = search_nodes(conn, args.query, args.limit)
-                _json({"query": args.query, "count": len(results), "results": results})
+                scope = _scope(args)
+                results = search_nodes(conn, args.query, args.limit, scope)
+                _json({"query": args.query, "scope": asdict(scope), "count": len(results), "results": results})
+            elif args.command == "find":
+                scope = _scope(args)
+                results = find_nodes(conn, args.query, scope)[:args.limit]
+                _json({"query": args.query, "scope": asdict(scope), "count": len(results), "results": results})
             elif args.command == "refs":
                 node = _resolve_one(conn, args.query)
                 _json(references(conn, node["stable_id"], args.direction, args.depth))

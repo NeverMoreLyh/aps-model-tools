@@ -1,6 +1,6 @@
 # APSGraph 功能支持清单
 
-> 版本：0.18.3
+> 版本：0.18.4
 > 更新时间：2026-08-23
 
 ---
@@ -17,19 +17,10 @@
 | 跨文件引用解析 | ✅ | TYPE_REF/DICT_REF/EXTENDS 等 10+ 种关系 |
 | 增量同步 | ✅ | SHA-256 文件指纹，单事务增删改 |
 | 同步状态检查 | ✅ | 文件差异统计 |
-| JAR 模型导入 | ✅ | 先读取依赖 POM，仅导入 `edsp-module` / `aps-module` 为 `true` 的业务 JAR，再提取模型 XML |
-| Maven workspace 构建 | ✅ | `scan --include-deps` 识别 aggregator 根目录并按依赖拓扑执行默认 `install -DskipTests`，独立 reactor 可通过 `--jobs` 并行 |
-| Maven JDK profile | ✅ | workspace 级 JDK 8/17 规则、CLI 覆盖、`JAVA_HOME` 注入与冲突阻断 |
-| 依赖模型一体化扫描 | ✅ | workspace XML + 标记为业务模块的 runtime 依赖 JAR XML，成功后原子发布 |
-| 分场景依赖索引 | ✅ | 完整 workspace、仅最高本地 parent 边界、外部 SQLite 索引合并、纯 workspace 四种模式 |
 | 外部索引复用 | ✅ | `scan --external-db` 或 `.apsgraph.json externalIndexes`，workspace 定义优先并可跨索引解析引用 |
-| 未解析引用警告 | ✅ | 纯 workspace 扫描返回 `unresolved_models` 并输出 stderr warning，不阻断扫描；依赖导入后按最终索引刷新统计 |
+| 未解析引用警告 | ✅ | XML 扫描返回 `unresolved_models` 并输出 stderr warning，不阻断扫描 |
 | 非模型引用过滤 | ✅ | 过滤 error 描述、SQL/Java primitive 与 Java 类名，拆分多值 `extension`，降低 unresolved 噪声 |
 | 版本与参数查看 | ✅ | `apsgraph --version` 输出版本；`apsgraph options` 只读输出默认参数与 workspace 生效规则 |
-| 扫描阶段日志 | ✅ | `scan --include-deps` 在 stderr 输出关键阶段与项目进度，stdout 保持 JSON |
-| Maven 阶段并行 | ✅ | build 与 dependencies 两阶段串行；阶段内独立 reactor/项目按 `--jobs` 并行 |
-| 依赖版本冲突阻断 | ✅ | 同一 `groupId:artifactId` 出现多个版本立即失败；不同 groupId 复用 artifact ID、多项目复用同一版本均不冲突 |
-| 项目依赖分析排除 | ✅ | 默认跳过 `*dist`、普通 aggregator 与中间 workspace parent；只解析本地 parent 链最高边界，支持 `.apsgraph.json` 项目规则、`--exclude-project` glob 与关闭默认规则 |
 | 解析错误记录 | ✅ | 跳过并记录，可选 fail-on-parse-error |
 | 索引归属校验 | ✅ | 拒绝非本工作空间的索引 |
 | 遗留 V1 升级 | ✅ | 自动检测 V1 并重建为 V2 |

@@ -60,13 +60,6 @@ class CliTest(unittest.TestCase):
         workspace.mkdir()
         (workspace / ".apsgraph.json").write_text(json.dumps({
             "excludeProjects": ["legacy/*"],
-            "maven": {
-                "jdk": {
-                    "default": "8",
-                    "javaHomes": {"8": "/opt/jdk8"},
-                    "rules": [{"match": ["modern/*"], "jdk": "17"}],
-                }
-            },
         }), encoding="utf-8")
         output = io.StringIO()
 
@@ -80,25 +73,23 @@ class CliTest(unittest.TestCase):
         self.assertEqual({
             "workspace": ".",
             "database": ".apsgraph/apsgraph.db",
-            "cache_dir": ".apsgraph",
-            "maven": {
-                "goal": ["install"],
-                "skip_tests": True,
-                "dependency_scope": "runtime",
-                "executable": "mvn",
-                "jobs": 4,
-                "default_excluded_projects": ["*dist"],
-                "deps_mode": "full",
-            },
             "external_indexes": [],
         }, report["defaults"])
-        self.assertEqual(["legacy/*", "*dist"], report["effective"]["exclude_projects"])
-        self.assertEqual("8", report["effective"]["maven_jdk"]["default"])
-        self.assertEqual("/opt/jdk8", report["effective"]["maven_jdk"]["java_homes"]["8"])
-        self.assertEqual(
-            {"match": ["modern/*"], "jdk": "17"},
-            report["effective"]["maven_jdk"]["rules"][0],
-        )
+        self.assertEqual({"external_indexes": []}, report["effective"])
+
+    def test_removed_maven_and_ui_commands_are_not_available(self):
+        for argv in (
+            ["scan", "--include-deps"],
+            ["scan", "--deps-mode", "framework"],
+            ["scan", "--jdk", "17"],
+            ["scan", "--project-jdk", "app=17"],
+            ["scan", "--java-home", "17=/opt/jdk"],
+            ["import-maven-deps"],
+            ["import-jars"],
+        ):
+            with self.assertRaises(SystemExit) as context:
+                cli_module.build_parser().parse_args(argv)
+            self.assertEqual(2, context.exception.code)
 
     def test_scan_uses_workspace_and_database_defaults(self):
         workspace = Path(self.tmp.name) / "workspace" / "repo"

@@ -11,7 +11,6 @@
 | [Operations guide](docs/operations-guide.md) | Release, inspection, troubleshooting, performance, and rollback |
 | [Feature matrix](docs/feature-matrix.md) | Detailed capability status |
 | [DDL rules](docs/ddl-generation-rules.md) | Dialect-specific DDL generation rules |
-| [UI 原型设计](docs/ui-prototype-design.md) | 本地只读 Web 工作台信息架构与确认稿 |
 | [APS 元模型规则](docs/aps-metamodel-rules.md) | 核心概念、UML、顶层/普通模型、XML 规则与 Demo |
 | [APS 类型/数据库映射](docs/aps-type-database-mapping.md) | 基础类型递归解析与 MySQL/Oracle/PostgreSQL 列类型规则 |
 
@@ -53,74 +52,19 @@ Use `apsgraph --version` for the installed version. To inspect that version's de
 apsgraph options
 ```
 
-## Maven dependencies and framework JAR models
+## XML indexing
 
-APSGraph supports four scan scenarios:
+APSGraph only reads recognized APS XML files from the workspace and writes their
+semantic nodes and relationships to SQLite. It does not invoke Maven, select a
+JDK, modify business source repositories, or execute generated DDL.
 
 ```bash
-# 1. Complete workspace build + Maven dependency/JAR model import
-apsgraph scan --include-deps
-
-# 2. Import framework dependency JAR XML without building every module
-apsgraph scan --include-deps --deps-mode framework
-
-# 3. Reuse an APS SQLite index built from dependency source code
-apsgraph scan --external-db /path/to/dependency/.apsgraph/apsgraph.db
-
-# 4. Workspace XML only; unresolved references remain warnings
 apsgraph scan
+apsgraph sync
+apsgraph scan --external-db /path/to/shared-index/.apsgraph/apsgraph.db
 ```
 
-`apsgraph sync` only reads workspace XML and never invokes Maven. Framework mode builds only top local parent boundaries (for example `ap-parent`) with Maven `-N`; it resolves dependency JARs from that boundary instead of generating every module under `target/gen`. External-index mode merges dependency nodes into the workspace index, lets local references resolve against them, and retains those logical files during sync. Plain scan reports distinct unresolved model names in JSON and stderr warnings.
-
-Defaults are configurable:
-
-| Option | Default |
-|---|---|
-| Maven goal | `install` |
-| Tests | skipped (`-DskipTests`) |
-| Dependency scope | `runtime` (includes compile/runtime) |
-| Index | `.apsgraph/apsgraph.db` |
-| Cache | `.apsgraph/` |
-| Parallel Maven jobs | `4` (`--jobs`) |
-
-APSGraph discovers `pom.xml` projects, identifies Maven reactor/aggregator roots, and builds those roots in workspace dependency order, stops on the first failure, rejects different versions of the same Maven `groupId:artifactId` coordinate, and only atomically publishes the completed index. Dependency analysis skips packaging/aggregator POMs and intermediate workspace parents; the top boundary of a local parent chain is analyzed once (for example, `prod-parent -> ap-out-parent -> ap-parent -> external parent` analyzes only `ap-parent` from that parent chain). Different groups may reuse an artifact ID safely. Projects matching `*dist` are excluded from dependency analysis by default. Workspace rules can be tracked in `.apsgraph.json` (`excludeProjects` or `maven.excludeProjects`), while repeatable `--exclude-project PATTERN` adds command-line overrides and `--no-default-project-excludes` disables the built-in default rule. Exclusion affects dependency analysis, not reactor builds. Before importing dependency XML, APSGraph reads the dependency artifact POM and imports only JARs whose properties contain `<edsp-module>true</edsp-module>` or `<aps-module>true</aps-module>`; missing or disabled markers are skipped before XML inspection. Existing indexes remain unchanged when a build, dependency check, or JAR XML import fails.
-
-Workspaces that mix JDK 8 and JDK 17 projects can define reactor-level JDK profiles. Resolution is fail-closed; a reactor that requires multiple `JAVA_HOME` values is rejected. CLI project overrides win over `--jdk`, which wins over workspace rules/default:
-
-```json
-{
-  "maven": {
-    "excludeProjects": ["*dist"],
-    "jdk": {
-      "default": "8",
-      "javaHomes": {
-        "8": "/Library/Java/JavaVirtualMachines/zulu-8.jdk/Contents/Home",
-        "17": "auto"
-      },
-      "rules": [
-        {"match": ["api-parent", "api-parent/*"], "jdk": "17"}
-      ]
-    }
-  }
-}
-```
-
-Build units respect inter-reactor dependencies and independent build units can run in parallel with `--jobs`; dependency resolution starts only after the entire build phase succeeds and also parallelizes independent projects. Use `--project-jdk PROJECT=PROFILE`, `--jdk PROFILE`, or `--java-home PROFILE=PATH` to override the workspace policy. The same resolved JDK is used for build, `dependency:list`, and `dependency:copy-dependencies`. During `scan --include-deps`, APSGraph prints major-stage and per-project progress to stderr while keeping machine-readable JSON on stdout.
-
-To refresh dependency models in an existing index without rebuilding workspace XML:
-
-```bash
-apsgraph import-maven-deps
-```
-
-Add `--build` to run Maven `install` first. Manual JAR import remains available:
-
-```bash
-apsgraph import-jars --jar /path/to/aps-foundation.jar --jar /path/to/aps-common.jar
-```
-
-Imported JAR entries use logical `jar:<jar>!/<entry>` paths, are retained during workspace sync, and participate in reference resolution.
+Unresolved model references remain warnings.
 
 ## Build or rebuild the index
 
@@ -138,8 +82,6 @@ apsgraph sync
 
 `sync` compares normalized relative paths and SHA-256 hashes, applies added/modified/deleted files in one transaction, then rebinds cross-file references. It refuses legacy schema files and indexes owned by another workspace.
 
-`apsgraph scan --embed-xml` enables offline XML viewing. It stores each successfully parsed local XML file as one `xml_documents` row keyed by `file_id`; model nodes remain semantic (top-level plus meaningful children), not every DOM tag. `apsgraph sync --embed-xml` updates embedded content for added or modified files.
-
 ## Query and preview DDL
 
 ```bash
@@ -153,7 +95,6 @@ DDL output is a fail-closed experimental subset and is never executed.
 
 ## Bridge an APS model to generated Java and CodeGraph consumers
 
-Build generated Java first when `target/gen` is absent (normally with the project's Maven generate-sources/build goal):
 
 ```bash
 cd /path/to/v8.7-all/ap-parent

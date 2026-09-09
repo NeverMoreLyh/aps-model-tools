@@ -53,14 +53,6 @@ CREATE TABLE IF NOT EXISTS edges (
 CREATE INDEX IF NOT EXISTS idx_edges_from ON edges(from_node_id);
 CREATE INDEX IF NOT EXISTS idx_edges_to ON edges(to_node_id);
 CREATE INDEX IF NOT EXISTS idx_edges_raw_target ON edges(raw_target) WHERE raw_target IS NOT NULL;
-CREATE TABLE IF NOT EXISTS xml_documents (
-    file_id INTEGER PRIMARY KEY,
-    content BLOB NOT NULL,
-    content_encoding TEXT NOT NULL,
-    content_hash BLOB NOT NULL,
-    content_size INTEGER NOT NULL,
-    FOREIGN KEY(file_id) REFERENCES model_files(id) ON DELETE CASCADE
-);
 CREATE TABLE IF NOT EXISTS scan_state (
     id INTEGER PRIMARY KEY CHECK(id=1),
     workspace TEXT NOT NULL,
@@ -136,9 +128,6 @@ def connect(db_path: Path | str, read_only: bool = False, initialize: bool = Tru
 
 
 def get_stats(conn: sqlite3.Connection) -> Dict[str, int]:
-    has_xml_documents = conn.execute(
-        "select count(*) from sqlite_schema where type='table' and name='xml_documents'"
-    ).fetchone()[0] > 0
     stats = {
         "files": conn.execute("select count(*) from model_files").fetchone()[0],
         "parsed": conn.execute("select count(*) from model_files where parse_status='PARSED'").fetchone()[0],
@@ -146,7 +135,6 @@ def get_stats(conn: sqlite3.Connection) -> Dict[str, int]:
         "nodes": conn.execute("select count(*) from nodes").fetchone()[0],
         "edges": conn.execute("select count(*) from edges").fetchone()[0],
         "unresolved": conn.execute("select count(*) from edges where to_node_id is null and raw_target is not null").fetchone()[0],
-        "xml_documents": conn.execute("select count(*) from xml_documents").fetchone()[0] if has_xml_documents else 0,
     }
     return stats
 

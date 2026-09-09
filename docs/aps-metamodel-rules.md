@@ -1,6 +1,6 @@
 # APS 元模型规则与模型目录
 
-> 版本：0.18.3
+> 版本：0.18.4
 > 适用基线：APS 6.51.173 / `aps-maven-6.51.16-RELEASE`
 > 真实样例工程：`/Users/joshua/code/v8.7-all`
 > 证据原则：本文只记录已从框架源码、模型注册表和真实 XML 交叉验证的信息；未验证项明确标注。
@@ -723,27 +723,7 @@ xml_tag
 
 关联到顶层文件和 XML 标签。
 
-### 8.3 原始 XML 内容
-
-APSGraph 支持：
-
-```bash
-apsgraph scan --embed-xml
-```
-
-保存：
-
-```text
-xml_documents.file_id
-xml_documents.content
-xml_documents.content_encoding
-xml_documents.content_hash
-xml_documents.content_size
-```
-
-默认扫描不复制 XML 正文，只保存路径和 hash。
-
-### 8.4 证据优先级
+### 8.3 证据优先级
 
 ```text
 原始 XML 属性/节点
@@ -1003,7 +983,6 @@ PYTHONPATH=/Users/joshua/code/aps-model-tools/src \
 python3 -m apsgraph scan \
   --workspace /Users/joshua/code/v8.7-all \
   --db /Users/joshua/code/v8.7-all/.apsgraph/apsgraph.db \
-  --embed-xml
 ```
 
 当前实际索引：

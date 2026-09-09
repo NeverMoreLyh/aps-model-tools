@@ -4,9 +4,8 @@ import argparse
 import json
 import sys
 from dataclasses import asdict
-from dataclasses import replace as replace_dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from . import __version__
 from .bridge import build_bridge_report
@@ -15,15 +14,7 @@ from .ddl import generate_table_ddl
 from .ddlgen import DdlGenConfig, generate_all_ddl
 from .docx import DocExportReport, export_document
 from .impact import build_impact_report
-from .maven import (
-    DEFAULT_EXCLUDED_PROJECTS,
-    MavenJdkConfig,
-    import_maven_dependencies,
-    load_maven_jdk_config,
-    scan_workspace_with_dependencies,
-)
 from .scanner import (
-    import_jar_models,
     scan_workspace,
     scan_workspace_with_external_indexes,
     sync_workspace,
@@ -47,13 +38,6 @@ def _resolve_one(conn, query: str) -> Dict[str, Any]:
     return nodes[0]
 
 
-def _positive_int(value: str) -> int:
-    number = int(value)
-    if number < 1:
-        raise argparse.ArgumentTypeError("must be a positive integer")
-    return number
-
-
 def _positive_depth(value: str) -> int:
     depth = int(value)
     if depth < 1:
@@ -63,107 +47,12 @@ def _positive_depth(value: str) -> int:
 
 DEFAULT_DB = Path(".apsgraph/apsgraph.db")
 DEFAULT_WORKSPACE = Path(".")
-DEFAULT_CACHE_DIR = Path(".apsgraph")
-DEFAULT_MAVEN_JOBS = 4
 
 DEFAULT_OPTIONS = {
     "workspace": str(DEFAULT_WORKSPACE),
     "database": str(DEFAULT_DB),
-    "cache_dir": str(DEFAULT_CACHE_DIR),
-    "maven": {
-        "goal": ["install"],
-        "skip_tests": True,
-        "dependency_scope": "runtime",
-        "executable": "mvn",
-        "jobs": DEFAULT_MAVEN_JOBS,
-        "default_excluded_projects": list(DEFAULT_EXCLUDED_PROJECTS),
-        "deps_mode": "full",
-    },
     "external_indexes": [],
 }
-
-
-def _project_excludes(args: argparse.Namespace) -> List[str]:
-    """Combine workspace rules, built-in defaults, and command-line overrides.
-
-    The workspace file is ``.apsgraph.json``.  It may use either form:
-
-    ``{"excludeProjects": ["foo"]}``
-
-    or::
-
-        {"maven": {"excludeProjects": ["foo"]}}
-
-    Project rules always apply.  ``--no-default-project-excludes`` only
-    disables APSGraph's built-in ``*dist`` rule, while repeatable
-    ``--exclude-project`` values are appended last.
-    """
-    configured: List[str] = []
-    config_path = args.workspace / ".apsgraph.json"
-    if config_path.is_file():
-        try:
-            payload = json.loads(config_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"invalid {config_path}: {exc}") from exc
-        if not isinstance(payload, dict):
-            raise ValueError(f"{config_path} must contain a JSON object")
-        value = payload.get("excludeProjects")
-        if value is None and isinstance(payload.get("maven"), dict):
-            value = payload["maven"].get("excludeProjects")
-        if value is None:
-            value = []
-        if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-            raise ValueError(
-                f"{config_path} field 'excludeProjects' must be an array of strings"
-            )
-        configured = value
-
-    rules = list(configured)
-    if not args.no_default_project_excludes:
-        rules.extend(DEFAULT_EXCLUDED_PROJECTS)
-    rules.extend(args.exclude_project)
-    return list(dict.fromkeys(rules))
-
-
-def _parse_pair(value: str, option: str) -> Tuple[str, str]:
-    key, separator, configured = value.partition("=")
-    key = key.strip()
-    configured = configured.strip()
-    if not separator or not key or not configured:
-        raise ValueError(f"{option} must use KEY=VALUE")
-    return key, configured
-
-
-def _parse_pairs(values: List[str], option: str) -> Dict[str, str]:
-    result: Dict[str, str] = {}
-    for value in values:
-        key, configured = _parse_pair(value, option)
-        if key in result and result[key] != configured:
-            raise ValueError(f"duplicate {option} profile: {key}")
-        result[key] = configured
-    return result
-
-
-def _add_maven_jdk_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--jdk", default=None, metavar="PROFILE",
-                        help="JDK profile for all Maven execution (overrides workspace rules)")
-    parser.add_argument("--project-jdk", action="append", default=[], metavar="PROJECT=PROFILE",
-                        help="JDK profile for a Maven project/build-unit glob; repeatable")
-    parser.add_argument("--java-home", action="append", default=[], metavar="PROFILE=PATH",
-                        help="explicit JAVA_HOME for a JDK profile; repeatable")
-
-
-def _jdk_options(args: argparse.Namespace) -> Tuple[MavenJdkConfig, Optional[str], Mapping[str, str]]:
-    config = load_maven_jdk_config(args.workspace)
-    homes = _parse_pairs(args.java_home, "--java-home")
-    if homes:
-        config = replace_dataclass(config, java_homes={**config.java_homes, **homes})
-    return config, args.jdk, _parse_pairs(args.project_jdk, "--project-jdk")
-
-
-def _progress(message: str) -> None:
-    print(f"[apsgraph] {message}", file=sys.stderr, flush=True)
-
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -180,33 +69,8 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument("--db", type=Path, default=DEFAULT_DB,
                       help="SQLite index path (default: .apsgraph/apsgraph.db)")
     scan.add_argument("--fail-on-parse-error", action="store_true")
-    scan.add_argument("--embed-xml", action="store_true",
-                      help="embed source XML bytes in the read-only index for offline UI viewing")
-    scan.add_argument("--include-deps", action="store_true",
-                      help="build Maven projects, copy resolved dependency jars, and include their model XML")
-    scan.add_argument("--deps-mode", choices=["full", "framework"], default="full",
-                      help="dependency scan mode: full builds the workspace (default); framework builds only top local parent boundaries")
     scan.add_argument("--external-db", action="append", type=Path, default=[], metavar="DB",
-                      help="merge an APS SQLite index produced from dependency source; repeatable; incompatible with --include-deps")
-    scan.add_argument("--maven-goal", action="append", default=None, metavar="GOAL",
-                      help="Maven goal (default: install); repeatable")
-    scan.add_argument("--skip-tests", dest="skip_tests", action="store_true", default=True,
-                      help="pass -DskipTests to Maven (default)")
-    scan.add_argument("--no-skip-tests", dest="skip_tests", action="store_false",
-                      help="run tests during Maven builds")
-    scan.add_argument("--deps-scope", choices=["compile", "runtime", "test"], default="runtime",
-                      help="dependency scope to copy and import (default: runtime)")
-    scan.add_argument("--maven", default="mvn", help="Maven executable (default: mvn)")
-    scan.add_argument("--cache-dir", type=Path, default=DEFAULT_CACHE_DIR,
-                      help="workspace-relative cache directory (default: .apsgraph)")
-    scan.add_argument("--jobs", type=_positive_int, default=DEFAULT_MAVEN_JOBS, metavar="N",
-                      help="parallel Maven jobs inside build/dependency phases (default: 4)")
-    scan.add_argument("--exclude-project", action="append", default=[], metavar="PATTERN",
-                      help="skip dependency analysis for a project glob; repeatable "
-                           "(matched against artifactId/project path)")
-    scan.add_argument("--no-default-project-excludes", action="store_true",
-                      help="disable the default '*dist' dependency-analysis exclusion")
-    _add_maven_jdk_arguments(scan)
+                      help="merge an APS SQLite index produced from another XML scan; repeatable")
 
     options = sub.add_parser(
         "options",
@@ -221,55 +85,12 @@ def build_parser() -> argparse.ArgumentParser:
     sync.add_argument("--db", type=Path, default=DEFAULT_DB,
                       help="SQLite index path (default: .apsgraph/apsgraph.db)")
     sync.add_argument("--fail-on-parse-error", action="store_true")
-    sync.add_argument("--embed-xml", action="store_true",
-                      help="embed added/modified source XML bytes in the index")
 
     status = sub.add_parser("status")
     status.add_argument("--workspace", type=Path, default=DEFAULT_WORKSPACE,
                          help="workspace root (default: current directory)")
     status.add_argument("--db", type=Path, default=DEFAULT_DB,
                        help="SQLite index path (default: .apsgraph/apsgraph.db)")
-
-    importdeps = sub.add_parser(
-        "import-maven-deps",
-        help="resolve Maven dependencies and replace JAR-imported models in an existing index",
-    )
-    importdeps.add_argument("--workspace", type=Path, default=DEFAULT_WORKSPACE,
-                            help="workspace root (default: current directory)")
-    importdeps.add_argument("--db", type=Path, default=DEFAULT_DB,
-                            help="SQLite index path (default: .apsgraph/apsgraph.db)")
-    importdeps.add_argument("--build", action="store_true",
-                            help="build workspace projects before resolving dependencies")
-    importdeps.add_argument("--maven-goal", action="append", default=None, metavar="GOAL",
-                            help="Maven goal used with --build (default: install); repeatable")
-    importdeps.add_argument("--skip-tests", dest="skip_tests", action="store_true", default=True,
-                            help="pass -DskipTests to Maven (default)")
-    importdeps.add_argument("--no-skip-tests", dest="skip_tests", action="store_false",
-                            help="run tests during Maven builds")
-    importdeps.add_argument("--deps-scope", choices=["compile", "runtime", "test"], default="runtime",
-                            help="dependency scope to copy and import (default: runtime)")
-    importdeps.add_argument("--deps-mode", choices=["full", "framework"], default="full",
-                            help="dependency scan mode: full resolves workspace modules (default); framework resolves only top local parent boundaries")
-    importdeps.add_argument("--maven", default="mvn", help="Maven executable (default: mvn)")
-    importdeps.add_argument("--cache-dir", type=Path, default=DEFAULT_CACHE_DIR,
-                            help="workspace-relative cache directory (default: .apsgraph)")
-    importdeps.add_argument("--jobs", type=_positive_int, default=DEFAULT_MAVEN_JOBS, metavar="N",
-                            help="parallel Maven jobs inside build/dependency phases (default: 4)")
-    importdeps.add_argument("--exclude-project", action="append", default=[], metavar="PATTERN",
-                            help="skip dependency analysis for a project glob; repeatable "
-                                 "(matched against artifactId/project path)")
-    importdeps.add_argument("--no-default-project-excludes", action="store_true",
-                            help="disable the default '*dist' dependency-analysis exclusion")
-    _add_maven_jdk_arguments(importdeps)
-
-    importjars = sub.add_parser("import-jars",
-                                help="import APS model XML from Maven dependency jars (framework base models)")
-    importjars.add_argument("--db", type=Path, default=DEFAULT_DB,
-                                help="SQLite index path (default: .apsgraph/apsgraph.db)")
-    importjars.add_argument("--jar", action="append", default=[], type=Path, metavar="JAR",
-                            help="dependency jar to import; repeatable")
-    importjars.add_argument("--no-reresolve", action="store_true",
-                            help="skip re-resolving reference edges after import")
 
     stats = sub.add_parser("stats")
     stats.add_argument("--db", type=Path, default=DEFAULT_DB)
@@ -405,24 +226,14 @@ def _options_report(workspace: Path) -> Dict[str, Any]:
     cache, or index.  It gives scripts a stable way to inspect defaults because
     those defaults may change between APSGraph releases.
     """
-    scan_args = build_parser().parse_args([
-        "scan", "--include-deps", "--workspace", str(workspace)
-    ])
-    effective_excludes = _project_excludes(scan_args)
+    scan_args = build_parser().parse_args(["scan", "--workspace", str(workspace)])
     external_indexes = _external_indexes(scan_args)
-    jdk_config = load_maven_jdk_config(workspace)
     return {
         "version": __version__,
         "workspace": str(Path(workspace).resolve()),
         "defaults": DEFAULT_OPTIONS,
         "effective": {
             "external_indexes": [str(value.resolve()) for value in external_indexes],
-            "exclude_projects": effective_excludes,
-            "maven_jdk": {
-                "default": jdk_config.default_profile,
-                "java_homes": dict(jdk_config.java_homes),
-                "rules": [asdict(rule) for rule in jdk_config.rules],
-            },
         },
     }
 
@@ -444,46 +255,23 @@ def main(argv: Optional[List[str]] = None) -> int:
     try:
         if args.command == "scan":
             external_indexes = _external_indexes(args)
-            if args.embed_xml and (args.include_deps or external_indexes):
-                raise ValueError("--embed-xml currently supports workspace XML-only scans")
-            if args.include_deps and external_indexes:
-                raise ValueError("--include-deps and --external-db are mutually exclusive")
-            if args.include_deps:
-                jdk_config, jdk_profile, project_jdk = _jdk_options(args)
-                result = scan_workspace_with_dependencies(
-                    args.workspace,
-                    args.db,
-                    goals=args.maven_goal or ["install"],
-                    skip_tests=args.skip_tests,
-                    dependency_scope=args.deps_scope,
-                    maven=args.maven,
-                    cache_dir=args.cache_dir,
-                    excluded_projects=_project_excludes(args),
-                    fail_on_parse_error=args.fail_on_parse_error,
-                    jdk_config=jdk_config,
-                    jdk_profile=jdk_profile,
-                    project_jdk=project_jdk,
-                    progress=_progress,
-                    jobs=args.jobs,
-                    framework_only=args.deps_mode == "framework",
-                )
-                _json(asdict(result))
-            elif external_indexes:
+            if external_indexes:
                 summary, external = scan_workspace_with_external_indexes(
                     args.workspace, args.db, external_indexes, args.fail_on_parse_error
                 )
                 _json({"scan": asdict(summary), "external": external})
             else:
-                summary = scan_workspace(args.workspace, args.db, args.fail_on_parse_error, args.embed_xml)
+                summary = scan_workspace(args.workspace, args.db, args.fail_on_parse_error)
                 for target in summary.unresolved_models:
-                    _progress(f"warning: unresolved model reference: {target}")
+                    print(f"[apsgraph] warning: unresolved model reference: {target}",
+                          file=sys.stderr, flush=True)
                 _json(asdict(summary))
             return 0
         if args.command == "options":
             _json(_options_report(args.workspace))
             return 0
         if args.command == "sync":
-            summary = sync_workspace(args.workspace, args.db, args.fail_on_parse_error, args.embed_xml)
+            summary = sync_workspace(args.workspace, args.db, args.fail_on_parse_error)
             _json(asdict(summary))
             return 0
         if args.command == "status":
@@ -511,33 +299,6 @@ def main(argv: Optional[List[str]] = None) -> int:
                 args.json_output.write_text(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
             _json({"output": str(args.output), "json_output": str(args.json_output) if args.json_output else None,
                    "summary": result["summary"]})
-            return 0
-        if args.command == "import-maven-deps":
-            jdk_config, jdk_profile, project_jdk = _jdk_options(args)
-            result = import_maven_dependencies(
-                args.workspace,
-                args.db,
-                goals=args.maven_goal or ["install"],
-                skip_tests=args.skip_tests,
-                dependency_scope=args.deps_scope,
-                build=args.build,
-                maven=args.maven,
-                cache_dir=args.cache_dir,
-                excluded_projects=_project_excludes(args),
-                jdk_config=jdk_config,
-                jdk_profile=jdk_profile,
-                project_jdk=project_jdk,
-                progress=_progress,
-                jobs=args.jobs,
-                framework_only=args.deps_mode == "framework",
-            )
-            _json(result)
-            return 0
-        if args.command == "import-jars":
-            if not args.jar:
-                _json({"error": "at least one --jar is required"})
-                return 2
-            _json(import_jar_models(args.db, args.jar, reresolve=not args.no_reresolve))
             return 0
         if args.command == "doc-export":
             conn = connect(args.db, read_only=True)

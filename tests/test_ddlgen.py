@@ -1,4 +1,4 @@
-"""Regression tests for ddl-gen (multi-dialect DDL) and import-jars (Maven dependency models)."""
+"""Regression tests for ddl-gen (multi-dialect DDL)."""
 import json
 import sqlite3
 import tempfile

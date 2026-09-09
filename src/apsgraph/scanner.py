@@ -188,7 +188,7 @@ def _insert_edge(conn: sqlite3.Connection, from_node_id: int, relation: str, fil
     )
 
 
-def _parse_file(conn: sqlite3.Connection, workspace: Path, path: Path, suffix: str, embed_xml: bool = False) -> bool:
+def _parse_file(conn: sqlite3.Connection, workspace: Path, path: Path, suffix: str) -> bool:
     relative = path.relative_to(workspace).as_posix()
     content_hash = _hash(path)
     try:
@@ -201,10 +201,6 @@ def _parse_file(conn: sqlite3.Connection, workspace: Path, path: Path, suffix: s
         )
         return False
     registered = _register_parsed(conn, relative, suffix, content_hash, root)
-    if embed_xml:
-        file_id = conn.execute("select id from model_files where path=?", (relative,)).fetchone()[0]
-        conn.execute("insert or replace into xml_documents(file_id,content,content_encoding,content_hash,content_size) values(?,?,?,?,?)",
-                     (file_id, path.read_bytes(), "UTF-8", content_hash, path.stat().st_size))
     return registered
 
 
@@ -212,7 +208,7 @@ def _register_parsed(conn: sqlite3.Connection, logical_path: str, suffix: str,
                      content_hash: bytes, root: ET.Element) -> bool:
     """Register an already-parsed model document under a logical path.
 
-    Shared by workspace file scanning and Maven dependency jar imports.
+    Shared by workspace file scanning and archived XML imports.
     """
     root_tag = _local(root.tag)
     root_id = root.attrib.get("id", "")
@@ -266,13 +262,10 @@ def jar_logical_path(jar: Path, entry: str) -> str:
 
 def import_jar_models(db_path: Path | str, jars: List[Path | str],
                       reresolve: bool = True) -> Dict[str, object]:
-    """Import APS model XML documents found inside Maven dependency jars.
+    """Import APS model XML documents found inside ZIP-compatible archives.
 
-    Framework base models (KBaseType, SPType, GeneralFileService*, ...) live in
-    dependency jars, not in the business workspace; the native MavenModelLoader
-    traverses dependency jars for exactly this reason. Entries are registered
-    under logical paths ``jar:<jar>!/<entry>`` so sync never treats them as
-    workspace files.
+    Entries are registered under logical paths ``jar:<jar>!/<entry>`` so sync
+    never treats them as workspace files.
     """
     target = Path(db_path).resolve()
     conn = connect(target)
@@ -339,12 +332,12 @@ def import_external_indexes(
     external_indexes: List[Path | str],
     reresolve: bool = True,
 ) -> Dict[str, object]:
-    """Merge model nodes from dependency APS indexes into a workspace index.
+    """Merge model nodes from external APS indexes into a workspace index.
 
     Workspace definitions win when both indexes expose the same ``full_id``.
     Imported files use ``external-db:<db>!<model>`` logical paths and therefore
     remain stable during workspace sync.  Reference edges are re-resolved after
-    the merge, allowing local workspace XML to reference dependency models.
+    the merge, allowing local workspace XML to reference external models.
     """
     target = Path(db_path).resolve()
     conn = connect(target)
@@ -489,7 +482,7 @@ def _summary(conn: sqlite3.Connection, discovered: int) -> ScanSummary:
 def refresh_scan_summary(summary: ScanSummary, db_path: Path | str) -> ScanSummary:
     """Refresh graph counters from an index while retaining workspace scan counts.
 
-    Dependency imports add files and nodes after the workspace scan.  The scan
+    External index imports add files and nodes after the workspace scan.  The scan
     summary returned to callers must describe the final published graph, while
     discovered/parsed/failed file counts still describe workspace XML scanning.
     """
@@ -515,7 +508,7 @@ def refresh_scan_summary(summary: ScanSummary, db_path: Path | str) -> ScanSumma
     )
 
 
-def scan_workspace(workspace: Path | str, db_path: Path | str, fail_on_parse_error: bool = False, embed_xml: bool = False) -> ScanSummary:
+def scan_workspace(workspace: Path | str, db_path: Path | str, fail_on_parse_error: bool = False) -> ScanSummary:
     root = Path(workspace).resolve()
     _validate_workspace(root)
     files = sorted(discover_model_files(root), key=lambda item: item[0].as_posix())
@@ -538,10 +531,7 @@ def scan_workspace(workspace: Path | str, db_path: Path | str, fail_on_parse_err
         with conn:
             initialize_schema(conn, reset=True)
             for model_path, suffix in files:
-                if embed_xml:
-                    _parse_file(conn, root, model_path, suffix, True)
-                else:
-                    _parse_file(conn, root, model_path, suffix)
+                _parse_file(conn, root, model_path, suffix)
             _resolve_edges(conn)
             conn.execute("insert or replace into scan_state(id,workspace,scanner_version) values(1,?,?)", (str(root), SCANNER_VERSION))
         summary = _summary(conn, len(files))
@@ -564,7 +554,7 @@ def scan_workspace_with_external_indexes(
     external_indexes: List[Path | str],
     fail_on_parse_error: bool = False,
 ) -> Tuple[ScanSummary, Dict[str, object]]:
-    """Scan workspace XML, merge dependency indexes, then publish atomically."""
+    """Scan workspace XML, merge external indexes, then publish atomically."""
     root = Path(workspace).resolve()
     _validate_workspace(root)
     target = Path(db_path).resolve()
@@ -589,7 +579,7 @@ def scan_workspace_with_external_indexes(
 def _change_set(root: Path, conn: sqlite3.Connection):
     discovered = {path.relative_to(root).as_posix(): (path, suffix, _hash(path))
                   for path, suffix in discover_model_files(root)}
-    # jar-imported models (logical path prefix "jar:") are dependency artifacts,
+    # Archived models (logical path prefix "jar:") are external artifacts,
     # never workspace files; they must not participate in workspace diffing.
     existing = {row["path"]: bytes(row["content_hash"])
                 for row in conn.execute("select path,content_hash from model_files")
@@ -617,7 +607,7 @@ def workspace_status(workspace: Path | str, db_path: Path | str) -> WorkspaceSta
         conn.close()
 
 
-def sync_workspace(workspace: Path | str, db_path: Path | str, fail_on_parse_error: bool = False, embed_xml: bool = False) -> SyncSummary:
+def sync_workspace(workspace: Path | str, db_path: Path | str, fail_on_parse_error: bool = False) -> SyncSummary:
     root = Path(workspace).resolve()
     _validate_workspace(root)
     conn = connect(db_path)
@@ -633,10 +623,7 @@ def sync_workspace(workspace: Path | str, db_path: Path | str, fail_on_parse_err
                 conn.execute("delete from model_files where path=?", (path,))
             for path in added + modified:
                 model_path, suffix, _ = discovered[path]
-                if embed_xml:
-                    _parse_file(conn, root, model_path, suffix, True)
-                else:
-                    _parse_file(conn, root, model_path, suffix)
+                _parse_file(conn, root, model_path, suffix)
             _resolve_edges(conn)
             conn.execute("insert or replace into scan_state(id,workspace,scanner_version) values(1,?,?)", (str(root), SCANNER_VERSION))
         stats = get_stats(conn)

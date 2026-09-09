@@ -1,6 +1,6 @@
 # APSGraph 使用说明
 
-> 版本：0.18.3
+> 版本：0.18.4
 > 更新时间：2026-08-23
 > 项目地址：https://github.com/NeverMoreLyh/aps-model-tools
 
@@ -57,12 +57,9 @@ apsgraph --help
 | 命令 | 说明 |
 |---|---|
 | `scan` | 全量扫描工作空间，构建/重建 SQLite V2 索引 |
-| `scan --include-deps` | 编译 Maven workspace，导入依赖 JAR 模型后原子发布索引 |
 | `sync` | 增量同步源码变更到已有索引 |
 | `options` | 查看当前版本、默认参数与 workspace 生效规则 |
 | `status` | 查看工作空间与索引的同步状态 |
-| `import-maven-deps` | 解析 Maven 依赖并替换已有索引中的 JAR 导入模型 |
-| `import-jars` | 手工从指定 Maven 依赖 JAR 导入框架基础模型 |
 | `stats` | 查看索引统计信息 |
 | `show` | 查看指定模型的完整属性和直接关系 |
 | `refs` | 查询模型的引用关系（入/出/双向，可指定深度） |
@@ -90,8 +87,8 @@ apsgraph options --workspace /path/to/workspace
 `--version` 输出当前安装版本。`options` 是只读命令，输出 JSON，包含：
 
 1. 当前 `version`；
-2. 当前版本内置默认值：workspace、数据库、缓存目录、Maven goal、测试跳过、依赖 scope、Maven 可执行文件、并行数和默认排除规则；
-3. 指定 workspace 的生效排除规则与 JDK 策略。
+2. 当前版本内置默认值：workspace、数据库和缓存目录；
+3. 指定 workspace 的外部索引规则。
 
 该命令不会创建索引或缓存目录。完整命令行参数仍可通过 `apsgraph --help` 或 `apsgraph COMMAND --help` 查看。
 
@@ -106,25 +103,10 @@ apsgraph scan
 | `--workspace` | APS 源码仓库根目录（默认当前目录） |
 | `--db` | SQLite 索引输出路径（默认 `.apsgraph/apsgraph.db`） |
 | `--fail-on-parse-error` | 遇到解析错误时立即终止（默认跳过并记录） |
-| `--include-deps` | 先执行 Maven workspace 构建，再导入依赖 JAR 模型 |
-| `--deps-mode` | `full`（默认）完整 workspace；`framework` 只处理最高本地 parent 边界 |
-| `--external-db` | 合并依赖源码仓库生成的 APS SQLite 索引，可重复；不能与 `--include-deps` 同用 |
-| `--maven-goal` | Maven goal，可重复；默认 `install` |
-| `--skip-tests` / `--no-skip-tests` | 默认追加 `-DskipTests`，可改为执行测试 |
-| `--deps-scope` | 依赖范围：`compile` / `runtime` / `test`，默认 `runtime` |
-| `--maven` | Maven 可执行文件，默认 `mvn` |
+| `--external-db` | 合并其他 XML 扫描生成的 APS SQLite 索引，可重复 |
 | `--cache-dir` | workspace 相对缓存目录，默认 `.apsgraph` |
-| `--jobs` | build / dependencies 阶段内部的并行 Maven 任务数，默认 `4` |
-| `--exclude-project` | 跳过依赖分析的 project glob，可重复；匹配 artifactId 或项目相对路径 |
-| `.apsgraph.json` | workspace 级项目规则文件，可配置 `excludeProjects` 或 `maven.excludeProjects` |
-| `--no-default-project-excludes` | 关闭默认 `*dist` 排除规则 |
-| `--jdk` | 全局 JDK profile 覆盖，优先级高于 workspace 规则 |
-| `--project-jdk` | 项目/reactor glob 的 JDK profile 覆盖，格式 `PROJECT=PROFILE`，可重复 |
-| `--java-home` | profile 的显式 `JAVA_HOME`，格式 `PROFILE=PATH`，可重复 |
 
-普通 `scan` 不要求 Maven；未解析引用不会导致失败，JSON 的 `unresolved_models` 会列出缺失模型名，CLI 同时在 stderr 输出 warning。依赖 JAR 或外部索引导入完成后，`scan.unresolved` / `scan.unresolved_models` 会按最终数据库重新计算；`scan --include-deps` 额外返回 `workspace_unresolved_before_dependency_import` 用于对比导入前状态。扫描器不会把 error 描述、SQL/Java primitive、`class` / `resultClass` Java 类名当作 APS 模型引用，并会把空格分隔的多值 `extension` 拆成多条 EXTENDS 边。四种典型场景为：`scan --include-deps` 完整构建并解析全部依赖；`scan --include-deps --deps-mode framework` 只构建/解析最高本地 parent 边界；`scan --external-db DB` 复用依赖源码索引；普通 `scan` 只处理 workspace XML。`scan --include-deps` 的流程为：发现全部 `pom.xml`（排除 `target` 等目录）→ 识别 Maven aggregator/reactor 根项目并按 workspace 内依赖关系拓扑排序 → 按依赖约束执行默认 `mvn -B -DskipTests install`（有依赖关系的 reactor 保持先后顺序，独立 reactor 可由 `--jobs` 并行）→ 全部构建成功后并行执行各运行模块的 `dependency:list` 与 `dependency:copy-dependencies` → 检查依赖 POM 的业务模块标记并过滤 JAR → 扫描 workspace XML 并导入业务依赖 JAR XML → 原子替换最终索引。任一 Maven 项目失败、同一 `groupId:artifactId` 解析出多个版本、或依赖 XML 解析失败时立即退出，不替换已有索引。
-
-进度日志输出到 stderr，最终 JSON 仍输出到 stdout，便于管道处理。关键阶段包括项目发现、workspace 构建、每个 reactor 构建、依赖解析、版本冲突检查、workspace XML 扫描、JAR 模型导入和原子发布。
+普通 `scan` 只解析 workspace XML 并写入 SQLite；未解析引用不会导致失败，JSON 的 `unresolved_models` 会列出缺失模型名，CLI 同时在 stderr 输出 warning。使用 `--external-db` 时可合并其他 XML 扫描生成的 SQLite 索引。扫描器不会把 error 描述、SQL/Java primitive、`class` / `resultClass` Java 类名当作 APS 模型引用，并会把空格分隔的多值 `extension` 拆成多条 EXTENDS 边。
 
 **扫描的文件类型**（27 种 XML 后缀）：
 `.tables.xml`、`.parms.xml`、`.flowtrans.xml`、`.nsql.xml`、`.batchStep.xml`、`.batchgroup.xml`、`.serviceType.xml`、`.serviceImpl.xml`、`.sharding.xml`、`.workflow.xml` 等。
@@ -147,131 +129,13 @@ apsgraph status
 
 返回工作空间与索引的文件差异统计。
 
-### 5.4 Maven 依赖与 JAR 模型
-
-### 5.5 四种依赖使用场景
-
-**场景 1：最完整索引**
+### 5.4 外部索引复用
 
 ```bash
-apsgraph scan --include-deps
+apsgraph scan --external-db /path/to/shared-index/.apsgraph/apsgraph.db
 ```
 
-构建全部 Maven workspace，解析业务依赖 JAR，并导入其中的业务模型 XML，适合 APSGraph 与 CodeGraph 做最完整的桥接。
-
-**场景 2：只获取依赖 JAR XML**
-
-```bash
-apsgraph scan --include-deps --deps-mode framework
-```
-
-只构建最高本地 parent 边界（例如 `prod-parent -> ap-out-parent -> ap-parent -> external parent` 中的 `ap-parent`），Maven 使用 `-N` 非递归执行，不为了生成所有模块的 `target/gen` 类而完整编译 workspace。依赖解析也只针对该 parent 边界，随后仍按 `edsp-module` / `aps-module` 业务标记过滤 JAR。
-
-**场景 3：复用依赖项目源码索引**
-
-先在依赖项目执行：
-
-```bash
-cd /path/to/dependency-workspace
-apsgraph scan
-```
-
-再在业务 workspace 合并其 SQLite 索引：
-
-```bash
-apsgraph scan --external-db /path/to/dependency-workspace/.apsgraph/apsgraph.db
-```
-
-也可在业务 workspace 的 `.apsgraph.json` 固化路径：
-
-```json
-{
-  "externalIndexes": [
-    "/path/to/dependency-workspace/.apsgraph/apsgraph.db"
-  ]
-}
-```
-
-外部索引中的模型使用 `external-db:<数据库>!<模型文件>` 逻辑路径；workspace 同名 `full_id` 优先，本地 XML 可引用外部模型，`sync` 不会删除这些外部模型。
-
-**场景 4：只索引 workspace XML**
-
-```bash
-apsgraph scan
-```
-
-不调用 Maven、不导入依赖 JAR。如果引用了不存在的模型，扫描不会失败；JSON 返回 `unresolved` 数量和 `unresolved_models` 名称列表，并在 stderr 输出 warning。
-
-
-默认参数等价于 `--maven-goal install --skip-tests --deps-scope runtime --db .apsgraph/apsgraph.db --jobs 4`，所有参数均可显式覆盖。构建日志位于 `.apsgraph/logs/maven/`，依赖解析日志位于 `.apsgraph/logs/maven-dependencies/`，依赖清单位于 `.apsgraph/dependency-manifest.json`。可在 workspace 根目录维护 `.apsgraph.json`：
-
-```json
-{
-  "maven": {
-    "excludeProjects": ["legacy-parent", "packaging/*"]
-  }
-}
-```
-
-也支持简化格式：
-
-```json
-{
-  "excludeProjects": ["legacy-parent"]
-}
-```
-
-除了显式排除规则外，`packaging=pom` 与带 `<modules>` 的普通 aggregator 不执行依赖解析；workspace 内 parent 链只解析最高本地边界。例如 `prod-parent -> ap-out-parent -> ap-parent -> external parent` 时，`prod-parent`、`ap-out-parent` 是中间 parent，会被跳过，只解析 `ap-parent`，避免同一条 parent 链重复解析传递依赖。项目级规则始终生效；默认跳过 artifactId 或项目路径匹配 `*dist` 的项目依赖分析；例如 `delivery-dist`、`packaging/*dist`。依赖 JAR 导入前会先读取 artifact POM：只有 `<properties>` 中 `<edsp-module>true</edsp-module>` 或 `<aps-module>true</aps-module>` 才会被视为业务模块并继续检索 XML；属性缺失或值为 `false` 时直接跳过，不再按 XML 后缀盲目导入。该规则只影响依赖解析与 JAR 导入，不影响 Maven reactor 构建。可用 `--exclude-project` 增加规则，例如 `--exclude-project 'packaging/*'`；添加 `--no-default-project-excludes` 可关闭默认规则。清单会记录 `projects_analyzed` 与 `projects_excluded`。
-
-#### 混合 JDK workspace
-
-旧 APS Maven 插件可能要求 Maven 进程运行在 JDK 8；JDK 11+ 移除 `javax.xml.bind` 后会出现 `ClassNotFoundException: javax.xml.bind.JAXBException`。不要依赖 Maven 插件自动补依赖，应在 `.apsgraph.json` 中按 Maven reactor/build unit 配置 JDK：
-
-```json
-{
-  "maven": {
-    "excludeProjects": ["*dist"],
-    "jdk": {
-      "default": "8",
-      "javaHomes": {
-        "8": "/Library/Java/JavaVirtualMachines/zulu-8.jdk/Contents/Home",
-        "17": "auto"
-      },
-      "rules": [
-        {"match": ["api-parent", "api-parent/*"], "jdk": "17"},
-        {"match": ["ap-parent", "ap-parent/*"], "jdk": "8"}
-      ]
-    }
-  }
-}
-```
-
-`javaHomes` 支持显式路径、`auto`（macOS 调用 `/usr/libexec/java_home -v PROFILE`）以及 `JAVA_HOME_8` / `JAVA_HOME_17` 环境变量。profile 无法解析、或同一个 reactor 内不同项目解析出多个 profile 时立即失败，不会静默替换 JDK。解析优先级为 `--project-jdk` > `--jdk` > workspace rule > workspace default > 当前环境 `JAVA_HOME`。同一项目的 build、dependency:list、dependency:copy-dependencies 三个阶段使用同一个 `JAVA_HOME`。检测到 JAXB 缺类错误时，APSGraph 保留原始日志路径并附加 JDK 8 诊断提示。
-
-已有索引只需刷新依赖模型时：
-
-```bash
-apsgraph import-maven-deps
-apsgraph import-maven-deps --build
-apsgraph import-maven-deps --deps-scope compile --maven-goal package --no-skip-tests
-```
-
-`import-maven-deps` 会先在 staging 数据库中删除旧的 `jar:` 逻辑文件，再导入本次解析到且 POM 标记为业务模块的 JAR，成功后原子替换原索引；`--build` 时才执行 Maven 构建。
-
-处理规则：
-
-1. `scan` / `sync` 只读取工作空间 XML，不需要先执行 Maven 构建；
-2. `scan --include-deps` 会执行构建并可能访问 Maven 仓库/网络；
-3. 多个项目可以依赖同一坐标的同一版本；同一 `groupId:artifactId` 解析出多个版本时直接失败，不做 newest/nearest 选择，不同 groupId 复用同一 artifact ID 不算冲突；
-4. JAR 条目使用 `jar:JAR路径!/条目路径` 作为逻辑路径；
-5. `sync` 不会把 JAR 导入内容误判为新增/删除文件；
-6. 不带 `--include-deps` 的 `scan` 是全量重建，会清空之前的 JAR 导入结果。
-
-手工导入仍然可用：
-
-```bash
-apsgraph import-jars --jar /path/to/aps-foundation.jar --jar /path/to/aps-common.jar
-```
+外部索引中的模型使用 `external-db:<数据库>!<模型文件>` 逻辑路径；workspace 同名 `full_id` 优先，`sync` 不会删除外部模型。
 
 ### 5.5 stats — 索引统计
 
@@ -425,7 +289,6 @@ apsgraph xlsx-export --output-dir docs-xlsx --projects ap-parent
 apsgraph scan --workspace /path/to/v8.7-all
 
 # 2. 导入框架基础模型（可选）
-apsgraph import-jars --jar /path/to/aps-foundation.jar
 
 # 3. 验证统计
 apsgraph stats

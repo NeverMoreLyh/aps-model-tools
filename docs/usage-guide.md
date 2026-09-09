@@ -1,6 +1,6 @@
 # APSGraph 使用说明
 
-> 版本：0.18.5
+> 版本：0.18.6
 > 更新时间：2026-08-23
 > 项目地址：https://github.com/NeverMoreLyh/aps-model-tools
 
@@ -108,6 +108,8 @@ apsgraph scan
 | `--cache-dir` | workspace 相对缓存目录，默认 `.apsgraph` |
 
 普通 `scan` 只解析 workspace XML 并写入 SQLite；未解析引用不会导致失败，JSON 的 `unresolved_models` 会列出缺失模型名，CLI 同时在 stderr 输出 warning。使用 `--external-db` 时可合并其他 XML 扫描生成的 SQLite 索引。扫描器不会把 error 描述、SQL/Java primitive、`class` / `resultClass` Java 类名当作 APS 模型引用，并会把空格分隔的多值 `extension` 拆成多条 EXTENDS 边。
+
+扫描和同步的阶段进度写入 stderr，JSON 结果仍只写入 stdout，便于终端查看和脚本消费。
 
 **扫描的文件类型**（27 种 XML 后缀）：
 `.tables.xml`、`.parms.xml`、`.flowtrans.xml`、`.nsql.xml`、`.batchStep.xml`、`.batchgroup.xml`、`.serviceType.xml`、`.serviceImpl.xml`、`.sharding.xml`、`.workflow.xml` 等。

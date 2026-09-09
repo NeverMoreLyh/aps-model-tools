@@ -52,6 +52,10 @@ def _positive_limit(value: str) -> int:
     return limit
 
 
+def _progress(message: str) -> None:
+    print(f"[apsgraph] {message}", file=sys.stderr, flush=True)
+
+
 DEFAULT_DB = Path(".apsgraph/apsgraph.db")
 DEFAULT_WORKSPACE = Path(".")
 
@@ -269,11 +273,11 @@ def main(argv: Optional[List[str]] = None) -> int:
             external_indexes = _external_indexes(args)
             if external_indexes:
                 summary, external = scan_workspace_with_external_indexes(
-                    args.workspace, args.db, external_indexes, args.fail_on_parse_error
+                    args.workspace, args.db, external_indexes, args.fail_on_parse_error, _progress
                 )
                 _json({"scan": asdict(summary), "external": external})
             else:
-                summary = scan_workspace(args.workspace, args.db, args.fail_on_parse_error)
+                summary = scan_workspace(args.workspace, args.db, args.fail_on_parse_error, _progress)
                 for target in summary.unresolved_models:
                     print(f"[apsgraph] warning: unresolved model reference: {target}",
                           file=sys.stderr, flush=True)
@@ -283,7 +287,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             _json(_options_report(args.workspace))
             return 0
         if args.command == "sync":
-            summary = sync_workspace(args.workspace, args.db, args.fail_on_parse_error)
+            summary = sync_workspace(args.workspace, args.db, args.fail_on_parse_error, _progress)
             _json(asdict(summary))
             return 0
         if args.command == "status":

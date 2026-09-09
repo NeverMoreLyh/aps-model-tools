@@ -27,6 +27,69 @@ class DuplicateIdTest(unittest.TestCase):
             self.assertNotEqual(values[0]["stable_id"], values[1]["stable_id"])
             conn.close()
 
+    def test_stable_ids_use_semantic_identity_not_ordinal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            model = root / "models/foo.tables.xml"
+            model.parent.mkdir(parents=True)
+            model.write_text("""<schema id="Loan">
+              <table id="Customer"><fields>
+                <field id="name"/>
+                <field id="amount"/>
+              </fields></table>
+            </schema>""", encoding="utf-8")
+            db = root / "models.db"
+            scan_workspace(root, db)
+            conn = connect(db, read_only=True)
+            before = {
+                row["full_id"]: row["stable_id"]
+                for row in conn.execute("select full_id,stable_id from nodes where full_id!=''")
+            }
+            conn.close()
+
+            model.write_text("""<schema id="Loan">
+              <table id="Customer"><fields>
+                <field id="created_at"/>
+                <field id="name"/>
+                <field id="amount"/>
+              </fields></table>
+            </schema>""", encoding="utf-8")
+            scan_workspace(root, db)
+            conn = connect(db, read_only=True)
+            after = {
+                row["full_id"]: row["stable_id"]
+                for row in conn.execute("select full_id,stable_id from nodes where full_id!=''")
+            }
+            conn.close()
+
+            self.assertEqual("model:TABLE:models/foo.tables.xml#Loan.Customer", before["Loan.Customer"])
+            self.assertEqual("model:FIELD:models/foo.tables.xml#Loan.Customer.name", before["Loan.Customer.name"])
+            self.assertEqual(before["Loan.Customer"], after["Loan.Customer"])
+            self.assertEqual(before["Loan.Customer.name"], after["Loan.Customer.name"])
+            self.assertEqual(before["Loan.Customer.amount"], after["Loan.Customer.amount"])
+
+    def test_duplicate_semantic_ids_get_deterministic_disambiguators(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            model = root / "models/foo.tables.xml"
+            model.parent.mkdir(parents=True)
+            model.write_text("""<schema id="Loan">
+              <table id="Customer"><fields>
+                <field id="name"/><field id="name"/>
+              </fields></table>
+            </schema>""", encoding="utf-8")
+            db = root / "models.db"
+            scan_workspace(root, db)
+            conn = connect(db, read_only=True)
+            values = [row[0] for row in conn.execute(
+                "select stable_id from nodes where kind='FIELD' order by id")]
+            conn.close()
+
+            self.assertEqual([
+                "model:FIELD:models/foo.tables.xml#Loan.Customer.name~1",
+                "model:FIELD:models/foo.tables.xml#Loan.Customer.name~2",
+            ], values)
+
 
 if __name__ == "__main__":
     unittest.main()

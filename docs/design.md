@@ -1,6 +1,6 @@
 # APSGraph 设计文档
 
-> 版本：0.18.5
+> 版本：0.18.6
 > 更新时间：2026-08-23  
 > 文档定位：说明 APSGraph 的关键架构、模块设计、数据模型、算法、并发模型、性能设计和安全边界。
 
@@ -120,7 +120,7 @@ TRANSACTION
 
 ### 4.2 ID 设计
 
-- `stable_id`：面向内部稳定身份，包含逻辑路径、序号、full_id 和 kind。
+- `stable_id`：按 `model:{kind}:{workspace 相对路径}#{语义 ID}` 生成；普通节点不依赖 ordinal，只有同一文件、同一 kind、同一语义 ID 重复时才追加确定性的 `~1`、`~2` 消歧后缀。
 - `full_id`：面向模型引用解析，如 `Base.U_NAME`。
 - workspace 文件使用相对路径。
 - 归档 XML 使用 `jar:<archive>!<entry>`。
@@ -144,6 +144,7 @@ TRANSACTION
 
 - `scanner` 递归发现受支持的 XML 文件，解析语义节点、属性和关系并写入 SQLite。
 - `scan` 通过 staging 数据库完成全量重建，`sync` 依据路径和 SHA-256 增量更新。
+- `scan` 和 `sync` 将阶段进度写入 stderr，格式为当前阶段、已处理数/总数、百分比和文件路径。
 - 外部 SQLite 索引通过 `--external-db` 合并，workspace 定义优先。
 
 ## 6. 并发与性能设计

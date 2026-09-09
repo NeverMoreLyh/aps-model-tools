@@ -8,7 +8,7 @@ import tempfile
 import zipfile
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Dict, Iterator, List, Optional, Tuple
+from typing import Callable, Dict, Iterator, List, Optional, Tuple
 import xml.etree.ElementTree as ET
 
 from .store import SCHEMA_VERSION, connect, get_stats, initialize_schema, is_aps_index, rebuild_search_index
@@ -154,8 +154,10 @@ def _hash(path: Path) -> bytes:
     return digest.digest()
 
 
-def _stable(file_path: str, full_id: str, kind: str, ordinal: int) -> str:
-    identity = f"{file_path}#{ordinal}:{full_id}" if full_id else f"{file_path}#{ordinal}"
+def _stable(file_path: str, semantic_id: str, kind: str, disambiguator: Optional[int] = None) -> str:
+    identity = f"{file_path}#{semantic_id}"
+    if disambiguator is not None:
+        identity += f"~{disambiguator}"
     return f"model:{kind}:{identity}"
 
 
@@ -220,39 +222,70 @@ def _register_parsed(conn: sqlite3.Connection, logical_path: str, suffix: str,
         (logical_path, suffix, content_hash, "PARSED", root_tag, root_id, package),
     )
     file_id = cursor.lastrowid
-    ordinal = 0
+    records: List[Dict[str, object]] = []
 
-    def visit(element: ET.Element, owner_node_id: Optional[int], parent_full: str) -> None:
-        nonlocal ordinal
+    def visit(element: ET.Element, owner_record: Optional[int], parent_full: str,
+              parent_semantic: str) -> None:
         tag = _local(element.tag)
         attrs = dict(element.attrib)
         raw_id = attrs.get("id", "")
         kind = _kind(tag, attrs)
         creates_node = bool(raw_id) or element is root or tag in CONTAINER_TAGS
-        current_node_id = owner_node_id
         current_full = parent_full
+        current_semantic = parent_semantic
         if creates_node:
-            ordinal += 1
             full_id = "" if tag in CONTAINER_TAGS and not raw_id else _child_full_id(parent_full, tag, raw_id or root_id, root_id)
-            stable = _stable(logical_path, full_id, kind, ordinal)
-            current_node_id = conn.execute(
+            semantic_id = full_id or (f"{parent_semantic}.{tag}" if parent_semantic else tag)
+            record_id = len(records)
+            records.append({
+                "element": element,
+                "owner_record": owner_record,
+                "tag": tag,
+                "kind": kind,
+                "raw_id": raw_id or root_id,
+                "full_id": full_id,
+                "semantic_id": semantic_id,
+                "attrs": attrs,
+            })
+            current_full = full_id or parent_full
+            current_semantic = parent_semantic if tag in CONTAINER_TAGS and not raw_id else semantic_id
+            for child in list(element):
+                visit(child, record_id, current_full, current_semantic)
+            return
+        for child in list(element):
+            visit(child, owner_record, parent_full, parent_semantic)
+
+    visit(root, None, "", "")
+    identity_counts: Dict[Tuple[str, str], int] = {}
+    for record in records:
+        key = (str(record["kind"]), str(record["semantic_id"]))
+        identity_counts[key] = identity_counts.get(key, 0) + 1
+    identity_seen: Dict[Tuple[str, str], int] = {}
+    node_ids: Dict[int, int] = {}
+    for record_id, record in enumerate(records):
+        key = (str(record["kind"]), str(record["semantic_id"]))
+        disambiguator = None
+        if identity_counts[key] > 1:
+            identity_seen[key] = identity_seen.get(key, 0) + 1
+            disambiguator = identity_seen[key]
+        stable = _stable(logical_path, str(record["semantic_id"]), str(record["kind"]), disambiguator)
+        owner_record = record["owner_record"]
+        owner_node_id = node_ids.get(int(owner_record)) if owner_record is not None else None
+        current_node_id = conn.execute(
                 """insert into nodes(stable_id,kind,raw_id,full_id,owner_node_id,file_id,xml_tag,properties_json)
                 values(?,?,?,?,?,?,?,?)""",
-                (stable, kind, raw_id or root_id, full_id, owner_node_id, file_id, tag,
-                 json.dumps(attrs, ensure_ascii=False, sort_keys=True, separators=(",", ":"))),
+                (stable, str(record["kind"]), str(record["raw_id"]), str(record["full_id"]), owner_node_id,
+                 file_id, str(record["tag"]), json.dumps(record["attrs"], ensure_ascii=False,
+                 sort_keys=True, separators=(",", ":"))),
             ).lastrowid
-            current_full = full_id
-            if owner_node_id is not None:
-                _insert_edge(conn, owner_node_id, "CONTAINS", file_id, full_id, to_node_id=current_node_id)
-            for attr, relation in REFERENCE_ATTRS.items():
-                raw_value = attrs.get(attr, "")
-                for value in _model_reference_values(suffix, tag, attr, raw_value):
-                    _insert_edge(conn, current_node_id, relation, file_id, value, raw_target=value)
-        child_parent_full = parent_full if tag in CONTAINER_TAGS and not raw_id else current_full
-        for child in list(element):
-            visit(child, current_node_id, child_parent_full if creates_node else parent_full)
-
-    visit(root, None, "")
+        node_ids[record_id] = current_node_id
+        attrs = record["attrs"]
+        if owner_node_id is not None:
+            _insert_edge(conn, owner_node_id, "CONTAINS", file_id, str(record["full_id"]), to_node_id=current_node_id)
+        for attr, relation in REFERENCE_ATTRS.items():
+            raw_value = attrs.get(attr, "")
+            for value in _model_reference_values(str(suffix), str(record["tag"]), attr, raw_value):
+                _insert_edge(conn, current_node_id, relation, file_id, value, raw_target=value)
     return True
 
 
@@ -509,7 +542,8 @@ def refresh_scan_summary(summary: ScanSummary, db_path: Path | str) -> ScanSumma
     )
 
 
-def scan_workspace(workspace: Path | str, db_path: Path | str, fail_on_parse_error: bool = False) -> ScanSummary:
+def scan_workspace(workspace: Path | str, db_path: Path | str, fail_on_parse_error: bool = False,
+                   progress: Optional[Callable[[str], None]] = None) -> ScanSummary:
     root = Path(workspace).resolve()
     _validate_workspace(root)
     files = sorted(discover_model_files(root), key=lambda item: item[0].as_posix())
@@ -531,8 +565,13 @@ def scan_workspace(workspace: Path | str, db_path: Path | str, fail_on_parse_err
     try:
         with conn:
             initialize_schema(conn, reset=True)
-            for model_path, suffix in files:
+            total = len(files)
+            if progress:
+                progress(f"scan: parsing 0/{total} XML files")
+            for index, (model_path, suffix) in enumerate(files, 1):
                 _parse_file(conn, root, model_path, suffix)
+                if progress:
+                    progress(f"scan: parsing {index}/{total} XML files ({index * 100 // total}%) {model_path.relative_to(root).as_posix()}")
             _resolve_edges(conn)
             rebuild_search_index(conn)
             conn.execute("insert or replace into scan_state(id,workspace,scanner_version) values(1,?,?)", (str(root), SCANNER_VERSION))
@@ -555,6 +594,7 @@ def scan_workspace_with_external_indexes(
     db_path: Path | str,
     external_indexes: List[Path | str],
     fail_on_parse_error: bool = False,
+    progress: Optional[Callable[[str], None]] = None,
 ) -> Tuple[ScanSummary, Dict[str, object]]:
     """Scan workspace XML, merge external indexes, then publish atomically."""
     root = Path(workspace).resolve()
@@ -568,7 +608,9 @@ def scan_workspace_with_external_indexes(
     staging = Path(temp_name)
     staging.unlink()
     try:
-        workspace_summary = scan_workspace(root, staging, fail_on_parse_error=fail_on_parse_error)
+        workspace_summary = scan_workspace(root, staging, fail_on_parse_error=fail_on_parse_error, progress=progress)
+        if progress:
+            progress(f"scan: merging {len(external_indexes)} external SQLite indexes")
         result = import_external_indexes(staging, external_indexes)
         summary = refresh_scan_summary(workspace_summary, staging)
         os.replace(staging, target)
@@ -609,7 +651,8 @@ def workspace_status(workspace: Path | str, db_path: Path | str) -> WorkspaceSta
         conn.close()
 
 
-def sync_workspace(workspace: Path | str, db_path: Path | str, fail_on_parse_error: bool = False) -> SyncSummary:
+def sync_workspace(workspace: Path | str, db_path: Path | str, fail_on_parse_error: bool = False,
+                   progress: Optional[Callable[[str], None]] = None) -> SyncSummary:
     root = Path(workspace).resolve()
     _validate_workspace(root)
     conn = connect(db_path)
@@ -618,14 +661,19 @@ def sync_workspace(workspace: Path | str, db_path: Path | str, fail_on_parse_err
         if state and Path(state[0]).resolve() != root:
             raise ValueError(f"index belongs to another workspace: {state[0]}")
         discovered, added, modified, deleted, unchanged = _change_set(root, conn)
+        changed_paths = added + modified
+        if progress:
+            progress(f"sync: {len(added)} added, {len(modified)} modified, {len(deleted)} deleted")
         with conn:
             for path in deleted:
                 conn.execute("delete from model_files where path=?", (path,))
             for path in modified:
                 conn.execute("delete from model_files where path=?", (path,))
-            for path in added + modified:
+            for index, path in enumerate(changed_paths, 1):
                 model_path, suffix, _ = discovered[path]
                 _parse_file(conn, root, model_path, suffix)
+                if progress:
+                    progress(f"sync: parsing {index}/{len(changed_paths)} XML files ({index * 100 // len(changed_paths)}%) {path}")
             _resolve_edges(conn)
             rebuild_search_index(conn)
             conn.execute("insert or replace into scan_state(id,workspace,scanner_version) values(1,?,?)", (str(root), SCANNER_VERSION))

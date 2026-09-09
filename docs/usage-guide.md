@@ -1,6 +1,6 @@
 # APSGraph 使用说明
 
-> 版本：0.18.4
+> 版本：0.18.5
 > 更新时间：2026-08-23
 > 项目地址：https://github.com/NeverMoreLyh/aps-model-tools
 
@@ -62,6 +62,7 @@ apsgraph --help
 | `status` | 查看工作空间与索引的同步状态 |
 | `stats` | 查看索引统计信息 |
 | `show` | 查看指定模型的完整属性和直接关系 |
+| `search` | 使用 SQLite FTS5 模糊搜索 ID、full_id、中文名称和描述 |
 | `refs` | 查询模型的引用关系（入/出/双向，可指定深度） |
 | `impact` | 变更影响分析（反向追溯受影响节点） |
 | `ddl` | 单表 DDL 预览（实验性） |
@@ -153,7 +154,19 @@ apsgraph show SysDbTable.kapp_sundry_busi
 
 返回指定模型的完整属性（kind、full_id、properties）和一级关系。
 
-### 5.7 refs — 引用关系查询
+### 5.7 search — 模糊搜索模型
+
+当不知道精确 ID 时，可搜索模型 ID、`full_id`、中文名称或描述。中文支持短语和部分匹配：
+
+```bash
+apsgraph search "账户类型"
+apsgraph search "开户" --limit 20
+apsgraph search "account_type" --db .apsgraph/apsgraph.db
+```
+
+每条结果包含 `kind`、`full_id`、`chinese_name`、`description`、`matched_fields`、文件路径及节点属性。
+
+### 5.8 refs — 引用关系查询
 
 ```bash
 apsgraph refs BpDict.A.addr --direction both --depth 2
@@ -165,7 +178,7 @@ apsgraph refs BpDict.A.addr --direction both --depth 2
 | `--direction` | `in`（谁引用了我）/ `out`（我引用了谁）/ `both`（默认） |
 | `--depth` | 遍历深度（默认 1，最小 1） |
 
-### 5.8 impact — 变更影响分析
+### 5.9 impact — 变更影响分析
 
 ```bash
 apsgraph impact BpDict.A.addr --depth 3

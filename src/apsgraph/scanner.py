@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Dict, Iterator, List, Optional, Tuple
 import xml.etree.ElementTree as ET
 
-from .store import SCHEMA_VERSION, connect, get_stats, initialize_schema, is_aps_index
+from .store import SCHEMA_VERSION, connect, get_stats, initialize_schema, is_aps_index, rebuild_search_index
 
 SUFFIXES = (
     ".flowtrans.xml", ".nsql.xml", ".batchStep.xml", ".batchgroup.xml",
@@ -308,6 +308,7 @@ def import_jar_models(db_path: Path | str, jars: List[Path | str],
                     skipped += 1
             if reresolve:
                 _resolve_edges(conn)
+            rebuild_search_index(conn)
         stats = get_stats(conn)
     finally:
         conn.close()
@@ -533,6 +534,7 @@ def scan_workspace(workspace: Path | str, db_path: Path | str, fail_on_parse_err
             for model_path, suffix in files:
                 _parse_file(conn, root, model_path, suffix)
             _resolve_edges(conn)
+            rebuild_search_index(conn)
             conn.execute("insert or replace into scan_state(id,workspace,scanner_version) values(1,?,?)", (str(root), SCANNER_VERSION))
         summary = _summary(conn, len(files))
         if fail_on_parse_error and summary.failed_files:
@@ -625,6 +627,7 @@ def sync_workspace(workspace: Path | str, db_path: Path | str, fail_on_parse_err
                 model_path, suffix, _ = discovered[path]
                 _parse_file(conn, root, model_path, suffix)
             _resolve_edges(conn)
+            rebuild_search_index(conn)
             conn.execute("insert or replace into scan_state(id,workspace,scanner_version) values(1,?,?)", (str(root), SCANNER_VERSION))
         stats = get_stats(conn)
         result = SyncSummary(len(added), len(modified), len(deleted), unchanged,

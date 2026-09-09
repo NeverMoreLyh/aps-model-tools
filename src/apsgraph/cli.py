@@ -20,7 +20,7 @@ from .scanner import (
     sync_workspace,
     workspace_status,
 )
-from .store import connect, find_nodes, get_stats, references
+from .store import connect, find_nodes, get_stats, references, search_nodes
 from .xlsx_export import ExcelExportReport, export_excel
 
 
@@ -43,6 +43,13 @@ def _positive_depth(value: str) -> int:
     if depth < 1:
         raise argparse.ArgumentTypeError("depth must be >= 1")
     return depth
+
+
+def _positive_limit(value: str) -> int:
+    limit = int(value)
+    if limit < 1:
+        raise argparse.ArgumentTypeError("limit must be >= 1")
+    return limit
 
 
 DEFAULT_DB = Path(".apsgraph/apsgraph.db")
@@ -98,6 +105,11 @@ def build_parser() -> argparse.ArgumentParser:
     show = sub.add_parser("show")
     show.add_argument("query")
     show.add_argument("--db", type=Path, default=DEFAULT_DB)
+
+    search = sub.add_parser("search", help="fuzzy-search model IDs and descriptive XML attributes")
+    search.add_argument("query")
+    search.add_argument("--db", type=Path, default=DEFAULT_DB)
+    search.add_argument("--limit", type=_positive_limit, default=50)
 
     refs = sub.add_parser("refs")
     refs.add_argument("query")
@@ -473,6 +485,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                 node = _resolve_one(conn, args.query)
                 node["relations"] = references(conn, node["stable_id"], "both", 1)
                 _json(node)
+            elif args.command == "search":
+                results = search_nodes(conn, args.query, args.limit)
+                _json({"query": args.query, "count": len(results), "results": results})
             elif args.command == "refs":
                 node = _resolve_one(conn, args.query)
                 _json(references(conn, node["stable_id"], args.direction, args.depth))

@@ -109,6 +109,26 @@ class CliTest(unittest.TestCase):
         self.assertEqual(0, rc)
         self.assertTrue((workspace / ".apsgraph/apsgraph.db").is_file())
 
+    def test_search_cli_returns_ranked_model_metadata(self):
+        workspace = Path(self.tmp.name) / "search-workspace"
+        model = workspace / "Account.tables.xml"
+        model.parent.mkdir(parents=True)
+        model.write_text(
+            '<schema id="Account"><table id="account_type" longname="账户类型" '
+            'description="开户账户类型"/></schema>', encoding="utf-8")
+        main(["scan", "--workspace", str(workspace), "--db", str(self.db)])
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            rc = main(["search", "开户", "--db", str(self.db)])
+
+        self.assertEqual(0, rc)
+        result = json.loads(output.getvalue())
+        self.assertEqual(1, result["count"])
+        self.assertEqual("TABLE", result["results"][0]["kind"])
+        self.assertEqual("Account.account_type", result["results"][0]["full_id"])
+        self.assertEqual("账户类型", result["results"][0]["chinese_name"])
+        self.assertEqual("开户账户类型", result["results"][0]["description"])
+
     def test_read_command_rejects_missing_database_without_creating_it(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = Path(tmp) / "missing.db"

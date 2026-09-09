@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 from apsgraph.scanner import scan_workspace
-from apsgraph.store import connect, find_nodes, get_stats, references
+from apsgraph.store import connect, find_nodes, get_stats, references, search_nodes
 
 
 FIXTURE_FILES = {
@@ -113,6 +113,30 @@ class ScannerTest(unittest.TestCase):
         finally:
             conn.close()
         self.assertFalse({"error", "message", "java.util.Map", "systemId", "sql"} & raw_targets)
+
+    def test_fts_search_matches_ids_and_chinese_descriptions(self):
+        root = self.root / "search"
+        root.mkdir()
+        (root / "Account.tables.xml").write_text(
+            '<schema id="Account"><table id="account_type" longname="账户类型" '
+            'description="开户账户类型"/></schema>', encoding="utf-8")
+        db = root / "models.db"
+        scan_workspace(root, db)
+        conn = connect(db, read_only=True)
+        try:
+            account = search_nodes(conn, "账户")
+            opening = search_nodes(conn, "开户")
+            identifier = search_nodes(conn, "account_type")
+        finally:
+            conn.close()
+
+        self.assertEqual("Account.account_type", account[0]["full_id"])
+        self.assertEqual("TABLE", account[0]["kind"])
+        self.assertEqual("账户类型", account[0]["chinese_name"])
+        self.assertEqual("开户账户类型", account[0]["description"])
+        self.assertIn("longname", account[0]["matched_fields"])
+        self.assertEqual("description", opening[0]["matched_fields"][0])
+        self.assertIn("full_id", identifier[0]["matched_fields"])
 
     def test_multi_valued_table_extension_creates_one_edge_per_target(self):
         root = self.root / "multi-extension"

@@ -1,6 +1,6 @@
 # APSGraph 设计文档
 
-> 版本：0.18.4
+> 版本：0.18.5
 > 更新时间：2026-08-23  
 > 文档定位：说明 APSGraph 的关键架构、模块设计、数据模型、算法、并发模型、性能设计和安全边界。
 
@@ -114,6 +114,7 @@ TRANSACTION
 |---|---|
 | `model_files` | 文件路径、后缀、hash、解析状态、错误信息 |
 | `nodes` | 模型节点、类型、ID、owner、文件、XML tag、属性 |
+| `model_search` | 由节点标识和描述属性构成的 SQLite FTS5 搜索索引 |
 | `edges` | 节点关系、raw target、证据文件、证据值、置信度 |
 | `scan_state` | workspace、scanner 版本、同步状态 |
 

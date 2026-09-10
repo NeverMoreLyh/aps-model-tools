@@ -1,6 +1,6 @@
 # APSGraph 使用说明
 
-> 版本：0.18.6
+> 版本：0.18.7
 > 更新时间：2026-08-23
 > 项目地址：https://github.com/NeverMoreLyh/aps-model-tools
 
@@ -105,7 +105,6 @@ apsgraph scan
 | `--db` | SQLite 索引输出路径（默认 `.apsgraph/apsgraph.db`） |
 | `--fail-on-parse-error` | 遇到解析错误时立即终止（默认跳过并记录） |
 | `--external-db` | 合并其他 XML 扫描生成的 APS SQLite 索引，可重复 |
-| `--cache-dir` | workspace 相对缓存目录，默认 `.apsgraph` |
 
 普通 `scan` 只解析 workspace XML 并写入 SQLite；未解析引用不会导致失败，JSON 的 `unresolved_models` 会列出缺失模型名，CLI 同时在 stderr 输出 warning。使用 `--external-db` 时可合并其他 XML 扫描生成的 SQLite 索引。扫描器不会把 error 描述、SQL/Java primitive、`class` / `resultClass` Java 类名当作 APS 模型引用，并会把空格分隔的多值 `extension` 拆成多条 EXTENDS 边。
 
@@ -166,7 +165,15 @@ apsgraph search "开户" --limit 20
 apsgraph search "account_type" --db .apsgraph/apsgraph.db
 ```
 
-每条结果包含 `kind`、`full_id`、`chinese_name`、`description`、`matched_fields`、文件路径及节点属性。
+`search` 和 `find` 均支持范围过滤：
+
+```bash
+apsgraph search "编码" --kind FIELD --project dept-parent --module dept-bcs --path '*/src/main/resources/tables/**' --limit 20
+apsgraph find 'account_type' --kind TABLE --file 'Account.tables.xml'
+```
+
+可用过滤项：`--kind`（可重复）、`--project`、`--module`、`--path`（SQLite glob）、`--file`、`--owner`、`--top-level`。
+
 
 ### 5.8 refs — 引用关系查询
 
@@ -188,14 +195,14 @@ apsgraph impact BpDict.A.addr --depth 3
 
 从目标模型反向追溯受影响节点，按关系类型汇总，输出受影响节点列表、影响路径和未解析引用。
 
-### 5.9 ddl — 单表 DDL 预览
+### 5.10 ddl — 单表 DDL 预览
 
 ```bash
 apsgraph ddl kapp_sundry_busi --dialect mysql ```
 
 生成单张表的建表 DDL（实验性，fail-closed，不自动执行）。
 
-### 5.10 ddl-gen — 批量 DDL 生成
+### 5.11 ddl-gen — 批量 DDL 生成
 
 ```bash
 apsgraph ddl-gen --dialect mysql --output output/schema.sql --report output/report.json
@@ -303,9 +310,7 @@ apsgraph xlsx-export --output-dir docs-xlsx --projects ap-parent
 # 1. 全量扫描
 apsgraph scan --workspace /path/to/v8.7-all
 
-# 2. 导入框架基础模型（可选）
-
-# 3. 验证统计
+# 2. 验证统计
 apsgraph stats
 ```
 
@@ -342,6 +347,60 @@ apsgraph ddl-gen --dialect oracle --username APPS --table-space USERS --output s
 # 对比模型与实际 MySQL 库
 apsgraph db-diff --dialect mysql --dsn-env MYSQL_DSN --output-md output/diff.md
 ```
+
+### 6.6 真实工程验收测试（非单元测试）
+
+每次代码变更后，除 Python 单元测试外，必须以真实 `/Users/joshua/code/v8.7-all` 执行：
+
+```bash
+python3 scripts/acceptance_v87.py \\
+  --workspace /Users/joshua/code/v8.7-all \\
+  --report /Users/joshua/Documents/YYYY-MM-DD/apsgraph-v87-acceptance.json
+```
+
+该测试会从真实 XML 重建临时 SQLite 索引，测试所有公开 CLI，并记录每个命令的退出码、耗时和输出；每种节点类型最多随机抽取 20 个不同 `raw_id`，少于 20 个的类型全部覆盖，并逐一调用真实 `search` CLI；同时使用 `rg` 直接检索原始 XML，对全部抽样词、引用目标和类型 ID 做交叉验证。在 `db-diff` 离线模式下，真实 v8.7-all 当前存在模型自身的未解析扩展、类型或索引问题时，命令可以按契约返回非零并生成 ERROR/WARNING 报告；验收集会校验报告结构和错误发现，不会把真实模型错误伪装成通过。
+
+### 6.7 随机覆盖测试集
+
+抽样规则和结果说明见 `/Users/joshua/Documents/YYYY-MM-DD/apsgraph-v87-random-acceptance.md`。
+
+### 6.8 Metadata Graph MCP
+
+启动 stdio MCP：
+
+```bash
+apsgraph serve-mcp \\
+  --db /path/to/.apsgraph/apsgraph.db \\
+  --workspace /path/to/workspace
+```
+
+MCP 工具：
+
+```text
+search_metadata
+find_entity
+find_references
+get_dependencies
+get_impact
+find_unresolved_references
+get_entity_source
+```
+
+MCP 范围参数：
+
+```json
+{
+  "query": "编码",
+  "kinds": ["FIELD", "ELEMENT"],
+  "project": "dept-parent",
+  "module": "dept-bcs",
+  "path": "*/src/main/resources/tables/**",
+  "top_level": false,
+  "limit": 20
+}
+```
+
+
 
 ---
 

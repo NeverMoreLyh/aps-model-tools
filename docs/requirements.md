@@ -1,6 +1,6 @@
 # APSGraph 需求文档
 
-> 版本：0.18.6
+> 版本：0.18.7
 > 更新时间：2026-08-23  
 > 文档定位：本文件是 APSGraph 的长期需求基线，汇总产品定位、用户需求、功能需求、非功能需求与演进需求。新增需求必须先更新本文，再进入设计与实现。
 
@@ -37,7 +37,7 @@ APSGraph 不修改业务源码，不执行 DDL，不写入 CodeGraph 数据库�
 - 默认 workspace 是当前工作目录。
 - 默认数据库为 `<workspace>/.apsgraph/apsgraph.db`。
 - 默认缓存目录为 `<workspace>/.apsgraph`。
-- 用户可通过 `--workspace`、`--db`、`--cache-dir` 覆盖默认值。
+- 用户可通过 `--workspace`、`--db` 覆盖默认值。
 
 ### R3 XML 模型索引
 

@@ -4,7 +4,9 @@ import json
 import re
 import sqlite3
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
+
+from .search_scope import SearchScope
 
 
 SCHEMA_VERSION = 2
@@ -222,7 +224,34 @@ def _fts_query(query: str) -> str:
     return " AND ".join('"' + token.replace('"', '""') + '"' for token in tokens)
 
 
-def search_nodes(conn: sqlite3.Connection, query: str, limit: int = 50) -> List[Dict[str, Any]]:
+def _scope_sql(scope: SearchScope, alias: str = "n") -> Tuple[str, List[Any]]:
+    clauses: List[str] = []
+    params: List[Any] = []
+    if scope.kinds:
+        clauses.append(f"{alias}.kind in ({','.join('?' for _ in scope.kinds)})")
+        params.extend(scope.kinds)
+    if scope.project:
+        clauses.append("f.path like ?")
+        params.append(scope.project.strip("/") + "/%")
+    if scope.module:
+        clauses.append("('/' || f.path || '/') like ?")
+        params.append("%/" + scope.module.strip("/") + "/%")
+    if scope.path:
+        clauses.append("f.path glob ?")
+        params.append(scope.path)
+    if scope.file:
+        clauses.append("(f.path=? or f.path like ?)")
+        params.extend((scope.file, "%/" + scope.file))
+    if scope.owner:
+        clauses.append("(owner.stable_id=? or owner.full_id=? or owner.raw_id=?)")
+        params.extend((scope.owner, scope.owner, scope.owner))
+    if scope.top_level:
+        clauses.append(f"{alias}.owner_node_id is null")
+    return (" and " + " and ".join(clauses) if clauses else ""), params
+
+
+def search_nodes(conn: sqlite3.Connection, query: str, limit: int = 50,
+                 scope: SearchScope = SearchScope()) -> List[Dict[str, Any]]:
     if conn.execute(
         "select 1 from sqlite_schema where type='table' and name='model_search'"
     ).fetchone() is None:
@@ -230,17 +259,18 @@ def search_nodes(conn: sqlite3.Connection, query: str, limit: int = 50) -> List[
     match = _fts_query(query)
     if not match:
         return []
+    scope_sql, scope_params = _scope_sql(scope)
     rows = conn.execute(
-        """select n.id,n.stable_id,n.kind,n.raw_id,n.full_id,
+        f"""select n.id,n.stable_id,n.kind,n.raw_id,n.full_id,
                   owner.stable_id as owner_id,n.owner_node_id,
                   f.path as file_path,n.file_id,n.xml_tag,n.properties_json
            from model_search
            join nodes n on n.id=cast(model_search.node_id as integer)
            join model_files f on f.id=n.file_id
            left join nodes owner on owner.id=n.owner_node_id
-           where model_search match ?
+           where model_search match ? {scope_sql}
            order by bm25(model_search), n.kind, n.full_id, f.path limit ?""",
-        (match, limit),
+        [match, *scope_params, limit],
     ).fetchall()
     results = []
     needle = query.casefold()
@@ -259,11 +289,14 @@ def search_nodes(conn: sqlite3.Connection, query: str, limit: int = 50) -> List[
     return results
 
 
-def find_nodes(conn: sqlite3.Connection, query: str) -> List[Dict[str, Any]]:
+def find_nodes(conn: sqlite3.Connection, query: str,
+               scope: SearchScope = SearchScope()) -> List[Dict[str, Any]]:
+    scope_sql, scope_params = _scope_sql(scope)
     rows = conn.execute(
-        NODE_SELECT + """ where n.stable_id=? or n.full_id=? or n.raw_id=?
+        NODE_SELECT + """ where (n.stable_id=? or n.full_id=? or n.raw_id=?)
+        """ + scope_sql + """
         order by case when n.stable_id=? then 0 when n.full_id=? then 1 else 2 end,n.kind,f.path""",
-        (query, query, query, query, query),
+        [query, query, query, *scope_params, query, query],
     ).fetchall()
     return [_row_to_dict(row) for row in rows]
 

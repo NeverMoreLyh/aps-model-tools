@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sys
 import sqlite3
+import urllib.parse
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -12,6 +13,7 @@ from .store import EDGE_SELECT, connect, find_nodes, references, search_nodes
 
 SERVER_NAME = "apsgraph-metadata"
 SERVER_VERSION = "0.1.0"
+DEFAULT_DB_RELPATH = ".apsgraph/apsgraph.db"
 
 _SCOPE_PROPERTIES = {
     "kinds": {"type": "array", "items": {"type": "string"}},
@@ -44,11 +46,52 @@ def result_text(value: Any) -> Dict[str, Any]:
 
 
 class MetadataGraphMcp:
-    def __init__(self, db: Path, workspace: Path = Path(".")):
-        self.db = db
-        self.workspace = workspace.resolve()
+    def __init__(self, db: Path | None = None, workspace: Path | None = None):
+        self.db = Path(db) if db is not None else None
+        self.workspace = Path(workspace).resolve() if workspace is not None else None
+        self._client_roots = False
+        self._request_count = 0
+
+    def should_request_roots(self) -> bool:
+        return self.workspace is None and self._client_roots
+
+    def next_request_id(self) -> str:
+        self._request_count += 1
+        return f"apsgraph-roots-{self._request_count}"
+
+    def apply_roots(self, roots: List[Any]) -> None:
+        """Resolve workspace (and default db) from client-declared MCP roots."""
+        candidates: List[Path] = []
+        for root in roots or []:
+            uri = root.get("uri") if isinstance(root, dict) else None
+            if not uri or not uri.startswith("file:"):
+                continue
+            path = Path(urllib.parse.unquote(urllib.parse.urlparse(uri).path))
+            if path.is_dir():
+                candidates.append(path)
+        if candidates:
+            with_db = [p for p in candidates if (p / DEFAULT_DB_RELPATH).is_file()]
+            chosen = (with_db or candidates)[0].resolve()
+            self.workspace = chosen
+            if self.db is None:
+                self.db = chosen / DEFAULT_DB_RELPATH
+            print(f"[apsgraph] MCP workspace from client root: {self.workspace}", file=sys.stderr, flush=True)
+        else:
+            self._fallback_paths("MCP client returned no usable roots")
+
+    def _fallback_paths(self, reason: str) -> None:
+        if self.workspace is None:
+            self.workspace = Path(".").resolve()
+            print(f"[apsgraph] {reason}; using cwd workspace: {self.workspace}", file=sys.stderr, flush=True)
+        if self.db is None:
+            self.db = self.workspace / DEFAULT_DB_RELPATH
+
+    def _ensure_paths(self) -> None:
+        if self.workspace is None or self.db is None:
+            self._fallback_paths("MCP workspace not resolved")
 
     def call_tool(self, name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        self._ensure_paths()
         scope = scope_from(arguments)
         limit = min(int(arguments.get("limit", 50)), 500)
         with connect(self.db, read_only=True) as conn:
@@ -88,7 +131,9 @@ class MetadataGraphMcp:
         method = request.get("method"); request_id = request.get("id")
         if method == "notifications/initialized": return None
         if method == "initialize":
-            return {"jsonrpc": "2.0", "id": request_id, "result": {"protocolVersion": request.get("params", {}).get("protocolVersion", "2024-11-05"), "capabilities": {"tools": {"listChanged": False}}, "serverInfo": {"name": SERVER_NAME, "version": SERVER_VERSION}}}
+            params = request.get("params") or {}
+            self._client_roots = "roots" in (params.get("capabilities") or {})
+            return {"jsonrpc": "2.0", "id": request_id, "result": {"protocolVersion": params.get("protocolVersion", "2024-11-05"), "capabilities": {"tools": {"listChanged": False}}, "serverInfo": {"name": SERVER_NAME, "version": SERVER_VERSION}}}
         if method == "tools/list": return {"jsonrpc": "2.0", "id": request_id, "result": {"tools": TOOLS}}
         if method == "tools/call":
             try:
@@ -98,14 +143,28 @@ class MetadataGraphMcp:
         return None
 
 
-def serve_stdio(db: Path, workspace: Path = Path(".")) -> int:
+def _send(message: Dict[str, Any]) -> None:
+    sys.stdout.write(json.dumps(message, ensure_ascii=False, separators=(",", ":")) + "\n")
+    sys.stdout.flush()
+
+
+def serve_stdio(db: Path | None = None, workspace: Path | None = None) -> int:
     server = MetadataGraphMcp(db, workspace)
+    pending_roots_id: str | None = None
     for line in sys.stdin:
         if not line.strip(): continue
         try:
-            response = server.dispatch(json.loads(line))
+            message = json.loads(line)
+            if pending_roots_id is not None and "method" not in message and message.get("id") == pending_roots_id:
+                pending_roots_id = None
+                server.apply_roots((message.get("result") or {}).get("roots") or [])
+                continue
+            response = server.dispatch(message)
             if response is not None:
-                sys.stdout.write(json.dumps(response, ensure_ascii=False, separators=(",", ":")) + "\n"); sys.stdout.flush()
+                _send(response)
+            if message.get("method") == "initialize" and server.should_request_roots():
+                pending_roots_id = server.next_request_id()
+                _send({"jsonrpc": "2.0", "id": pending_roots_id, "method": "roots/list"})
         except Exception as exc:
-            sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": str(exc)}}, ensure_ascii=False) + "\n"); sys.stdout.flush()
+            _send({"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": str(exc)}})
     return 0

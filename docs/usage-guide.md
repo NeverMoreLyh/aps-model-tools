@@ -1,6 +1,6 @@
 # APSGraph 使用说明
 
-> 版本：0.18.8
+> 版本：0.18.9
 > 更新时间：2026-09-11
 > 项目地址：https://github.com/NeverMoreLyh/aps-model-tools
 
@@ -369,10 +369,18 @@ python3 scripts/acceptance_v87.py \\
 启动 stdio MCP：
 
 ```bash
-apsgraph serve-mcp \\
-  --db /path/to/.apsgraph/apsgraph.db \\
+apsgraph serve-mcp \
+  --db /path/to/.apsgraph/apsgraph.db \
   --workspace /path/to/workspace
 ```
+
+客户端支持 MCP roots 协议时可零参数启动（工作区从客户端根目录自动解析，索引取 `<root>/.apsgraph/apsgraph.db`）：
+
+```bash
+apsgraph serve-mcp
+```
+
+路径解析顺序：显式参数 > MCP 客户端 roots > 当前工作目录。
 
 MCP 工具：
 

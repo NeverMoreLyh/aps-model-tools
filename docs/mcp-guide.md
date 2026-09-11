@@ -1,6 +1,6 @@
 # APSGraph Metadata Graph MCP 使用说明
 
-> 版本：0.18.8
+> 版本：0.18.9
 > 更新时间：2026-09-11
 
 ---
@@ -43,12 +43,27 @@ apsgraph serve-mcp \
 
 ### 3.2 MCP 客户端配置（stdio）
 
-ZCode / Claude Desktop / Cursor 等客户端的 MCP 配置中，把命令指向 `apsgraph`：
+**零参数配置（推荐，依赖 MCP roots 协议）**：客户端在 `initialize` 握手时声明 `roots` 能力的（ZCode、Claude Desktop、Cursor 等均支持），服务端握手后自动向客户端请求工作区根目录，并把 `<root>/.apsgraph/apsgraph.db` 作为索引：
 
 ```json
 {
   "mcpServers": {
     "apsgraph-metadata": {
+      "command": "apsgraph",
+      "args": ["serve-mcp"]
+    }
+  }
+}
+```
+
+多根工作区时优先选择含 `.apsgraph/apsgraph.db` 的根；解析结果会以 `[apsgraph] MCP workspace from client root: ...` 打到 stderr 供确认。
+
+**显式路径配置（多工程并存时推荐）**：一个工程一个具名 server 条目，路径一目了然：
+
+```json
+{
+  "mcpServers": {
+    "apsgraph-fat": {
       "command": "apsgraph",
       "args": [
         "serve-mcp",
@@ -59,6 +74,16 @@ ZCode / Claude Desktop / Cursor 等客户端的 MCP 配置中，把命令指向 
   }
 }
 ```
+
+### 3.3 工作区与索引解析顺序
+
+`serve-mcp` 按以下优先级解析路径：
+
+1. 显式参数 `--workspace` / `--db`（传了就跳过 roots 协议）；
+2. MCP 客户端 roots（`initialize` 时声明 `roots` 能力，服务端发 `roots/list` 请求取第一个可用根目录；索引取 `<root>/.apsgraph/apsgraph.db`）；
+3. 回退到当前工作目录（cwd），索引取 `<cwd>/.apsgraph/apsgraph.db`。
+
+客户端不支持 roots 且未传参数时，回退到 cwd；路径无效时错误会在每次工具调用时以 JSON-RPC `-32602` 返回。
 
 服务名（`serverInfo.name`）为 `apsgraph-metadata`，版本为 `0.1.0`。
 

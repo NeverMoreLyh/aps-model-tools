@@ -1,6 +1,6 @@
 # APS 元数据模型 → 数据库建表脚本：生成规则梳理
 
-> 版本：0.18.8
+> 版本：0.18.9
 
 > 依据 `aps-maven/aps-model-util` 源码与 FreeMarker 模板逆向整理，
 > 作为统一 DDL 生成工具（`apsgraph ddl-gen`）的实现基准。

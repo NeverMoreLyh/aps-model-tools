@@ -239,8 +239,11 @@ def build_parser() -> argparse.ArgumentParser:
     xls.add_argument("--projects", nargs="*", default=[],
                      help="filter to specific project names (e.g. ap-parent aggr-parent)")
     mcp = sub.add_parser("serve-mcp", help="serve Metadata Graph tools over stdio MCP")
-    mcp.add_argument("--db", type=Path, default=DEFAULT_DB)
-    mcp.add_argument("--workspace", type=Path, default=DEFAULT_WORKSPACE)
+    mcp.add_argument("--db", type=Path, default=None,
+                     help="SQLite metadata index (default: <workspace>/.apsgraph/apsgraph.db; "
+                          "workspace resolved from --workspace, MCP client roots, or cwd)")
+    mcp.add_argument("--workspace", type=Path, default=None,
+                     help="workspace root (default: MCP client root when supported, otherwise cwd)")
     return parser
 
 

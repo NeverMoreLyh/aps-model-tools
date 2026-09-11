@@ -1,6 +1,6 @@
 # APSGraph Metadata Graph MCP 使用说明
 
-> 版本：0.18.9
+> 版本：0.18.10
 > 更新时间：2026-09-11
 
 ---
@@ -140,7 +140,24 @@ apsgraph serve-mcp \
 
 ---
 
-## 5. 功能、性能与正确性验证
+## 5. Agent 路由指引（业务工程 AGENTS.md 推荐片段）
+
+agent 决定"用 apsgraph MCP 还是 rg"主要依赖工具描述与工作区 instructions；把下面的片段加进业务工程的 `AGENTS.md`（或 `CLAUDE.md`），可以让路由变成明确指令而不是猜测：
+
+```markdown
+## APS 元数据检索路由
+
+- 查询 APS 模型元数据（表/字段/枚举/字典/批处理/服务/引用关系/影响面/源 XML 定义）时，
+  优先使用 apsgraph MCP 工具（mcp__apsgraph-metadata__*），不要用 rg 扫 XML。
+- 查询 Java 代码、注释、配置等非模型文本时，使用 rg 或 codegraph。
+- MCP 搜索结果为空或存疑时，用 rg 对原始 XML 兜底验证后再下结论，不要直接放弃。
+- find_references / get_dependencies / get_impact / get_entity_source 要求精确实体：
+  查询词可能歧义时先 find_entity 确认（必要时加 kinds/project/file 范围），再展开。
+```
+
+---
+
+## 6. 功能、性能与正确性验证
 
 仓库提供 `scripts/verify_mcp.py`，对任意业务工程执行三类验证：
 
@@ -159,7 +176,7 @@ python3 scripts/verify_mcp.py \
 
 ---
 
-## 6. 已知限制
+## 7. 已知限制
 
 1. 服务为单请求串行处理（stdio 逐行），不支持并发请求。
 2. `get_entity_source` 直接读工作区文件，要求 `--workspace` 与索引扫描时的工作区一致（或路径可解析）。

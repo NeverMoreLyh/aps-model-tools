@@ -1,7 +1,7 @@
 # APSGraph 使用说明
 
-> 版本：0.18.7
-> 更新时间：2026-08-23
+> 版本：0.18.8
+> 更新时间：2026-09-11
 > 项目地址：https://github.com/NeverMoreLyh/aps-model-tools
 
 ---
@@ -400,7 +400,17 @@ MCP 范围参数：
 }
 ```
 
+MCP 客户端配置、全部工具的参数与结果约定、调用示例详见 `docs/mcp-guide.md`。
 
+MCP 功能、性能与正确性验证（含与 `rg` 直接检索原始 XML 的交叉验证）：
+
+```bash
+python3 scripts/verify_mcp.py \
+  --workspace /path/to/workspace \
+  --db /path/to/workspace/.apsgraph/apsgraph.db \
+  --samples 20 \
+  --report /tmp/apsgraph-mcp-verify.json
+```
 
 ---
 

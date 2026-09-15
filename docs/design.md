@@ -1,7 +1,7 @@
 # APSGraph 设计文档
 
-> 版本：0.18.10
-> 更新时间：2026-09-11  
+> 版本：0.19.0
+> 更新时间：2026-09-15  
 > 文档定位：说明 APSGraph 的关键架构、模块设计、数据模型、算法、并发模型、性能设计和安全边界。
 
 ---
@@ -79,6 +79,17 @@
 | dbdiff | 模型 schema 与数据库 schema 规范化后对比 |
 | bridge | APS full_id 与生成 Java / CodeGraph 节点匹配 |
 | classify | 关键词与路径启发式分类 |
+| workbench | FTS5 维度列过滤查询、kind 组过滤、owner 链递归 CTE 子结构装配、full_id/raw_id 引用跳转解析 |
+
+### 3.5.1 查询工作台（workbench）
+
+`apsgraph workbench` 用标准库 `http.server.ThreadingHTTPServer` 在 `127.0.0.1` 提供只读查询页面与 JSON API（`/api/search`、`/api/node`、`/api/children`、`/api/top-groups`、`/api/basetypes`、`/api/stats`）：
+
+- 查询分组由 `KIND_GROUPS` 定义：枚举（ENUM_VALUE）、数据字典与错误码（同为 DICTIONARY，按 `model_files.suffix` 的 `.d_schema.xml` / `.error.xml` 区分）、复合类型、表、服务、交易、批量交易；顶层模型页按 `owner_node_id IS NULL` 过滤并可按 kind 再过滤。
+- 模糊搜索复用 `store` 的 FTS5 中文 ngram 分词，维度 `id/fullid/longname/desc` 映射为 FTS5 列过滤（`col : (...)`），空关键字退化为分页浏览。
+- 详情装配用递归 CTE 沿 `owner_node_id` 收集子结构：表的字段/索引/ODB 索引/序列，服务操作的输入输出（`input`/`output` 容器为无 id 穿透节点，需在子树中定位），交易的输入输出与 flow 步骤（`serviceName`/`transactionId` 以 full_id/raw_id 兜底解析为可跳转目标），字典与错误码的枚举值明细。
+- 基础类型页数据为内置 APS SimpleType 清单（与 `docs/aps-type-database-mapping.md` 基线一致），不依赖索引。
+- 前端为 `workbench_static/` 下的单页应用（vanilla HTML/JS/CSS），随 wheel 以 package-data 分发；结果分页（每页 50）、子孙树懒加载。
 
 ### 3.6 原始 XML 与语义节点索引
 
@@ -227,6 +238,7 @@ staging DB -> validate -> os.replace(staging, target)
 | 索引误替换 | staging + 原子发布 |
 | CodeGraph 污染 | 只读连接 |
 | 命令注入 | DB 参数通过参数化 SQL 传递 |
+| workbench 暴露面 | 仅绑定 127.0.0.1、GET-only、索引只读打开、静态资源防路径穿越 |
 
 ## 9. 可观测性设计
 

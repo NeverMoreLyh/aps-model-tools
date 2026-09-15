@@ -1,7 +1,7 @@
 # APSGraph 运维说明文档
 
-> 版本：0.18.10
-> 更新时间：2026-09-11
+> 版本：0.19.0
+> 更新时间：2026-09-15
 > 文档定位：说明安装发布、索引巡检、故障处理、备份回滚和 CI 使用。
 
 ## 1. 支持环境
@@ -68,6 +68,10 @@ apsgraph sync --workspace /path/to/workspace
 
 检查 `--db` 路径。不要手工修改 SQLite；移走非法文件后重新执行 `scan`。跨 workspace 索引需要重新构建。
 
+### 6.4 workbench 启动失败
+
+报 `index database does not exist` 时先对目标工作区执行 `apsgraph scan`，或用 `--db` 指向正确索引。报端口占用时用 `--port` 换端口；`--no-browser` 可在无桌面环境的 CI/远程主机上只打印 URL 不拉起浏览器。
+
 ## 7. 性能治理
 
 日常变更优先使用 `sync`，大范围变更或索引损坏时使用 `scan`。查询应限制影响分析深度，大型索引放在可靠的本地磁盘。
@@ -104,3 +108,4 @@ apsgraph stats --db /path/to/workspace/.apsgraph/apsgraph.db
 - `.apsgraph` 仅用于索引和 SQLite 产物。
 - DDL 只生成，不执行。
 - CodeGraph 数据库只读。
+- `workbench` 查询工作台仅绑定 `127.0.0.1`，索引以只读模式打开，不接受任何写请求（非 GET 一律 405）。不要将端口转发或反向代理到公网；如需远程访问，由运维侧自行落地鉴权与访问控制。

@@ -1,0 +1,323 @@
+import json
+import tempfile
+import threading
+import unittest
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+from apsgraph.scanner import scan_workspace
+from apsgraph.store import connect
+from apsgraph.workbench import (
+    BASIC_TYPES,
+    WorkbenchServer,
+    child_nodes,
+    node_detail,
+    search_group,
+    serve_workbench,
+    top_groups,
+)
+
+
+FIXTURE_FILES = {
+    "datatype/Base.u_schema.xml": """<?xml version="1.0"?>
+<schema id="Base" package="demo.datatype">
+  <restrictionType id="U_NAME" base="string" maxLength="40"/>
+  <restrictionType id="U_STATUS" base="string" maxLength="1">
+    <enumeration id="A" value="A" longname="有效"/>
+    <enumeration id="I" value="I" longname="无效"/>
+  </restrictionType>
+</schema>
+""",
+    "dict/DemoDict.d_schema.xml": """<?xml version="1.0"?>
+<schema id="DemoDict" package="demo.dict">
+  <complexType id="CustomerInfo" dict="true" longname="客户信息">
+    <element id="name" type="Base.U_NAME"/>
+  </complexType>
+</schema>
+""",
+    "tables/Demo.tables.xml": """<?xml version="1.0"?>
+<schema id="DemoTables" package="demo.tables">
+  <table id="demo_user" name="demo_user" longname="用户表">
+    <fields>
+      <field id="id" type="Base.U_NAME" primarykey="true" nullable="false"/>
+      <field id="status" type="Base.U_STATUS" ref="DemoDict.CustomerInfo.name"/>
+    </fields>
+    <indexes><index id="idx_status" type="index" fields="status"/></indexes>
+    <odbindexes><odbindex id="odb_id" type="unique" fields="id"/></odbindexes>
+    <dbSequence id="seq_demo"/>
+  </table>
+</schema>
+""",
+    "svc/DemoSvc.serviceType.xml": """<?xml version="1.0"?>
+<serviceType id="DemoSvc" longname="演示服务" package="demo.svc">
+  <service id="openAccount" longname="开户">
+    <interface>
+      <input><fields><field id="custName" type="Base.U_NAME"/></fields></input>
+      <output><fields><field id="result" type="string"/></fields></output>
+    </interface>
+  </service>
+</serviceType>
+""",
+    "tran/demoTran.flowtrans.xml": """<?xml version="1.0"?>
+<flowtran id="demoTran" longname="演示交易" package="demo.tran">
+  <interface>
+    <input><fields><field id="in1" type="string"/></fields></input>
+    <output><fields><field id="out1" type="string"/></fields></output>
+  </interface>
+  <flow>
+    <service id="step_open" serviceName="DemoSvc.openAccount" longname="调用开户"/>
+    <service id="step_tran" transactionId="missingTran"/>
+  </flow>
+</flowtran>
+""",
+    "batch/demoBatch.batch_tran.xml": """<?xml version="1.0"?>
+<batch_transaction id="demoBatch" longname="演示批量" package="demo.batch">
+  <fields><field id="batchIn" type="string" fixedValue="X"/></fields>
+</batch_transaction>
+""",
+    "batch/step.batchStep.xml": """<?xml version="1.0"?>
+<batchStepGroup id="demoStep" longname="演示批量步骤" package="demo.batch"/>
+""",
+    "err/ErrCode.error.xml": """<?xml version="1.0"?>
+<schema id="ErrCode" package="demo.err">
+  <complexType id="SysError" dict="true" longname="系统错误码">
+    <enumeration id="E001" value="E001" longname="系统异常"/>
+  </complexType>
+</schema>
+""",
+}
+
+
+class WorkbenchTestBase(unittest.TestCase):
+    def build_index(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        for relative, content in FIXTURE_FILES.items():
+            path = root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content, encoding="utf-8")
+        db = root / "models.db"
+        scan_workspace(root, db)
+        return root, db
+
+
+class WorkbenchQueryTest(WorkbenchTestBase):
+    def setUp(self):
+        self.root, self.db = self.build_index()
+        self.conn = connect(self.db, read_only=True)
+        self.addCleanup(self.conn.close)
+
+    def test_search_by_each_dimension(self):
+        by_id = search_group(self.conn, "table", query="demo_user", dimension="id")
+        self.assertEqual(1, by_id["total"])
+        self.assertEqual("demo_user", by_id["results"][0]["raw_id"])
+
+        by_full = search_group(self.conn, "table", query="DemoTables.demo_user", dimension="fullid")
+        self.assertEqual(1, by_full["total"])
+
+        by_longname = search_group(self.conn, "table", query="用户", dimension="longname")
+        self.assertEqual(1, by_longname["total"])
+        self.assertEqual("用户表", by_longname["results"][0]["chinese_name"])
+
+        # description dimension: no table carries a description; the search must
+        # not silently fall back to other columns.
+        by_desc = search_group(self.conn, "table", query="用户表", dimension="desc")
+        self.assertEqual(0, by_desc["total"])
+
+        all_dims = search_group(self.conn, "table", query="demo_user")
+        self.assertEqual(1, all_dims["total"])
+
+    def test_group_kind_filters(self):
+        tables = search_group(self.conn, "table")
+        self.assertGreaterEqual(tables["total"], 1)
+        self.assertTrue(all(item["kind"] == "TABLE" for item in tables["results"]))
+
+        complex_types = search_group(self.conn, "complex_type")
+        self.assertEqual(0, complex_types["total"])
+
+        enums = search_group(self.conn, "enum", query="有效")
+        self.assertEqual(1, enums["total"])
+        self.assertEqual("有效", enums["results"][0]["chinese_name"])
+        self.assertEqual("Base.U_STATUS", enums["results"][0]["owner_full_id"])
+
+    def test_dictionary_and_error_code_split_by_suffix(self):
+        dictionaries = search_group(self.conn, "dictionary")
+        self.assertEqual(1, dictionaries["total"])
+        self.assertEqual("DemoDict.CustomerInfo", dictionaries["results"][0]["full_id"])
+        self.assertTrue(dictionaries["results"][0]["file_path"].endswith(".d_schema.xml"))
+
+        errors = search_group(self.conn, "error_code")
+        self.assertEqual(1, errors["total"])
+        self.assertEqual("ErrCode.SysError", errors["results"][0]["full_id"])
+        self.assertTrue(errors["results"][0]["file_path"].endswith(".error.xml"))
+
+    def test_browse_mode_and_pagination(self):
+        page1 = search_group(self.conn, "table", page=1, page_size=1)
+        self.assertEqual(1, page1["total"])
+        self.assertEqual(1, len(page1["results"]))
+        self.assertEqual("TABLE", page1["results"][0]["kind"])
+
+    def test_batch_kind_toggle(self):
+        main_batch = search_group(self.conn, "batch")
+        self.assertEqual(1, main_batch["total"])
+        self.assertEqual("demoBatch", main_batch["results"][0]["raw_id"])
+
+        steps = search_group(self.conn, "batch", kinds=["BATCH_STEP", "BATCH_GROUP"])
+        self.assertEqual(1, steps["total"])
+        self.assertEqual("BATCH_GROUP", steps["results"][0]["kind"])
+
+    def test_top_groups_and_top_search(self):
+        groups = {item["kind"]: item["count"] for item in top_groups(self.conn)}
+        self.assertIn("SCHEMA", groups)
+        self.assertIn("SERVICE_TYPE", groups)
+        self.assertIn("TRANSACTION", groups)
+        self.assertIn("BATCH_TRANSACTION", groups)
+
+        schemas = search_group(self.conn, "top", root_kind="SCHEMA")
+        self.assertEqual(4, schemas["total"])  # Base / DemoDict / DemoTables / ErrCode
+
+        every_top = search_group(self.conn, "top")
+        self.assertEqual(sum(groups.values()), every_top["total"])
+
+    def test_table_detail_structures(self):
+        table = search_group(self.conn, "table", query="demo_user", dimension="id")
+        detail = node_detail(self.conn, table["results"][0]["stable_id"])
+        structured = detail["detail"]
+        field_ids = {field["raw_id"] for field in structured["fields"]}
+        self.assertEqual({"id", "status"}, field_ids)
+        self.assertEqual(["idx_status"], [idx["raw_id"] for idx in structured["indexes"]])
+        self.assertEqual(["odb_id"], [idx["raw_id"] for idx in structured["odbindexes"]])
+        self.assertEqual(["seq_demo"], [seq["raw_id"] for seq in structured["sequences"]])
+
+    def test_service_detail_input_output(self):
+        service = search_group(self.conn, "service", query="DemoSvc", dimension="id")
+        detail = node_detail(self.conn, service["results"][0]["stable_id"])["detail"]
+        self.assertEqual(1, len(detail["operations"]))
+        operation = detail["operations"][0]
+        self.assertEqual(["custName"], [f["raw_id"] for f in operation["input"]])
+        self.assertEqual(["result"], [f["raw_id"] for f in operation["output"]])
+
+    def test_transaction_detail_flow_and_edges(self):
+        tran = search_group(self.conn, "transaction", query="demoTran", dimension="id")
+        payload = node_detail(self.conn, tran["results"][0]["stable_id"])
+        detail = payload["detail"]
+        self.assertEqual(["in1"], [f["raw_id"] for f in detail["input"]])
+        self.assertEqual(["out1"], [f["raw_id"] for f in detail["output"]])
+        self.assertEqual(["step_open", "step_tran"], [step["raw_id"] for step in detail["flow_steps"]])
+        steps = {step["raw_id"]: step for step in detail["flow_steps"]}
+        self.assertEqual("DemoSvc.openAccount", steps["step_open"]["raw_target"])
+        self.assertIsNotNone(steps["step_open"]["resolved_target"])
+        self.assertIsNone(steps["step_tran"]["resolved_target"])
+
+        # the flow call target resolves to the service operation detail via full_id
+        resolved = node_detail(self.conn, "DemoSvc.openAccount")
+        self.assertEqual("DemoSvc.openAccount", resolved["node"]["full_id"])
+
+    def test_error_code_and_dictionary_detail(self):
+        errors = search_group(self.conn, "error_code")
+        detail = node_detail(self.conn, errors["results"][0]["stable_id"])["detail"]
+        self.assertEqual(["E001"], [item["properties"]["value"] for item in detail["enum_values"]])
+
+        dicts = search_group(self.conn, "dictionary")
+        dict_detail = node_detail(self.conn, dicts["results"][0]["stable_id"])["detail"]
+        self.assertEqual(["name"], [item["raw_id"] for item in dict_detail["elements"]])
+
+    def test_child_nodes_tree(self):
+        schemas = search_group(self.conn, "top", root_kind="SCHEMA")
+        demo_tables = next(item for item in schemas["results"] if item["full_id"] == "DemoTables")
+        children = child_nodes(self.conn, demo_tables["stable_id"])
+        self.assertEqual(1, len(children))
+        self.assertEqual("DemoTables.demo_user", children[0]["full_id"])
+        self.assertTrue(children[0]["has_children"])
+
+    def test_basetype_catalog(self):
+        catalog = search_group(self.conn, "basetype", query="金额")
+        self.assertEqual(1, catalog["total"])
+        self.assertEqual("amount", catalog["results"][0]["name"])
+        self.assertEqual(len(BASIC_TYPES), 29)
+
+
+class WorkbenchHttpTest(WorkbenchTestBase):
+    def setUp(self):
+        self.root, self.db = self.build_index()
+        self.server = WorkbenchServer(self.db, 0)
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        self.addCleanup(self.server.server_close)
+        self.addCleanup(self.server.shutdown)
+        self.base_url = f"http://127.0.0.1:{self.server.server_port}"
+
+    def _get(self, path, method="GET"):
+        request = urllib.request.Request(self.base_url + path, method=method)
+        try:
+            with urllib.request.urlopen(request) as response:
+                return response.status, response.read()
+        except urllib.error.HTTPError as exc:
+            return exc.code, exc.read()
+
+    def test_static_assets_served(self):
+        status, body = self._get("/")
+        self.assertEqual(200, status)
+        self.assertIn(b"APSGraph", body)
+        status, body = self._get("/app.js")
+        self.assertEqual(200, status)
+        self.assertIn("runSearch".encode(), body)
+        status, body = self._get("/app.css")
+        self.assertEqual(200, status)
+
+    def test_static_path_traversal_blocked(self):
+        status, _ = self._get("/..%2fcli.py")
+        self.assertEqual(404, status)
+        status, _ = self._get("/missing.html")
+        self.assertEqual(404, status)
+
+    def test_api_endpoints(self):
+        status, body = self._get("/api/stats")
+        self.assertEqual(200, status)
+        payload = json.loads(body)
+        self.assertIn("stats", payload)
+        self.assertIn("top_groups", payload)
+
+        status, body = self._get("/api/search?group=table&q=demo_user&field=id")
+        self.assertEqual(200, status)
+        payload = json.loads(body)
+        self.assertEqual(1, payload["total"])
+
+        status, body = self._get("/api/search?group=basetype")
+        self.assertEqual(200, status)
+        self.assertEqual(29, len(json.loads(body)["results"]))
+
+        status, body = self._get("/api/search?group=error_code")
+        payload = json.loads(body)
+        stable_id = payload["results"][0]["stable_id"]
+        status, body = self._get("/api/node?id=" + urllib.request.quote(stable_id))
+        self.assertEqual(200, status)
+        detail = json.loads(body)
+        self.assertEqual("DICTIONARY", detail["node"]["kind"])
+        self.assertEqual(["E001"], [item["properties"]["value"] for item in detail["detail"]["enum_values"]])
+
+        status, body = self._get("/api/node?id=DemoSvc.openAccount")
+        self.assertEqual(200, status)
+        self.assertEqual("SERVICE_OPERATION", json.loads(body)["node"]["kind"])
+
+        status, body = self._get("/api/children?id=DemoTables")
+        self.assertEqual(200, status)
+        children = json.loads(body)["children"]
+        self.assertEqual(["DemoTables.demo_user"], [item["full_id"] for item in children])
+
+        status, _ = self._get("/api/unknown")
+        self.assertEqual(404, status)
+        status, _ = self._get("/api/node")
+        self.assertEqual(400, status)
+        status, _ = self._get("/api/search?group=table", method="POST")
+        self.assertEqual(405, status)
+
+    def test_serve_workbench_rejects_missing_db(self):
+        with self.assertRaises(FileNotFoundError):
+            serve_workbench(self.root / "nope.db", open_browser=False)
+
+
+if __name__ == "__main__":
+    unittest.main()

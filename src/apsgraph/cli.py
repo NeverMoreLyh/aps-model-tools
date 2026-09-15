@@ -23,6 +23,7 @@ from .scanner import (
 )
 from .search_scope import SearchScope
 from .store import connect, find_nodes, get_stats, references, search_nodes
+from .workbench import WORKBENCH_PORT, serve_workbench
 from .xlsx_export import ExcelExportReport, export_excel
 
 
@@ -244,6 +245,15 @@ def build_parser() -> argparse.ArgumentParser:
                           "workspace resolved from --workspace, MCP client roots, or cwd)")
     mcp.add_argument("--workspace", type=Path, default=None,
                      help="workspace root (default: MCP client root when supported, otherwise cwd)")
+    workbench = sub.add_parser(
+        "workbench",
+        help="serve the read-only SQLite metadata query workbench at 127.0.0.1 and open it in a browser")
+    workbench.add_argument("--db", type=Path, default=DEFAULT_DB,
+                           help="SQLite metadata index (default: .apsgraph/apsgraph.db)")
+    workbench.add_argument("--port", type=int, default=WORKBENCH_PORT,
+                           help=f"local port to bind on 127.0.0.1 (default: {WORKBENCH_PORT})")
+    workbench.add_argument("--no-browser", action="store_true",
+                           help="do not open the default browser automatically")
     return parser
 
 
@@ -327,6 +337,9 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 0
         if args.command == "serve-mcp":
             return serve_stdio(args.db, args.workspace)
+        if args.command == "workbench":
+            return serve_workbench(args.db, args.port,
+                                   open_browser=not args.no_browser, progress=_progress)
         if args.command == "status":
             _json(asdict(workspace_status(args.workspace, args.db)))
             return 0

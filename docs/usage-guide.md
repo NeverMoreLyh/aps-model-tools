@@ -1,7 +1,7 @@
 # APSGraph 使用说明
 
-> 版本：0.18.10
-> 更新时间：2026-09-11
+> 版本：0.19.0
+> 更新时间：2026-09-15
 > 项目地址：https://github.com/NeverMoreLyh/aps-model-tools
 
 ---
@@ -72,6 +72,8 @@ apsgraph --help
 | `classify` | 按功能能力审计模型与 Java 包分类 |
 | `doc-export` | 导出 Markdown 模型文档 |
 | `xlsx-export` | 导出 Excel 模型文档 |
+| `serve-mcp` | 以 stdio MCP 服务暴露元数据工具 |
+| `workbench` | 启动本地浏览器查询工作台（只读，127.0.0.1） |
 
 ---
 
@@ -419,6 +421,27 @@ python3 scripts/verify_mcp.py \
   --samples 20 \
   --report /tmp/apsgraph-mcp-verify.json
 ```
+
+### 6.9 查询工作台（workbench）
+
+对已扫描的工作区启动本地 Web 查询工作台：
+
+```bash
+apsgraph workbench                          # 默认 127.0.0.1:8321 并自动打开浏览器
+apsgraph workbench --db /path/to/.apsgraph/apsgraph.db
+apsgraph workbench --port 9000 --no-browser
+```
+
+- 纯标准库实现，索引以只读模式打开，服务器只绑定 `127.0.0.1`，无任何写操作。
+- 索引不存在时命令报错并提示先执行 `apsgraph scan`；运行日志输出到 stderr。
+
+页面与查询能力：
+
+1. **顶层模型**：按顶层模型类型（SCHEMA / SQL_GROUP / SERVICE_TYPE / TRANSACTION / BATCH_TRANSACTION 等）分组列出所有顶层节点；点击节点在详情面板展示递归包含的子模型树（逐层懒加载展开）。
+2. **类型查询页**：表、服务、交易 flowtran、批量交易（页内可切换 FILE_BATCH_TRANSACTION / BATCH_STEP / BATCH_GROUP）、复合类型、数据字典、枚举类型、错误码。枚举页按所属枚举分组展示枚举值；数据字典与错误码同为 DICTIONARY 节点，按来源文件后缀（`.d_schema.xml` / `.error.xml`）区分。
+3. **基础类型**：内置 APS SimpleType 清单（29 种）及其 MySQL / Oracle / PostgreSQL 列型映射，支持按名称/语义过滤，不依赖索引。
+4. **搜索**：查询框 + 维度下拉，支持按 `id` / `fullId` / `longname` / `desc` 单维度或全部维度模糊搜索（FTS5 + 中文 ngram 分词）；留空关键字则分页浏览全部。结果每页 50 条，支持翻页。
+5. **详情面板**：按类型结构化展示——表展示字段、物理索引、ODB 索引、序列；服务展示每个服务操作的输入/输出字段；交易展示输入/输出与流程编排（flow 步骤及调用目标）；批量交易展示输入字段、批量步骤与步骤组；字典/错误码展示数据项与枚举值明细。已解析引用渲染为可点击链接跳转到目标详情，未解析引用灰色显示原始目标。
 
 ---
 

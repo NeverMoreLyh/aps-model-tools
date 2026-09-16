@@ -12,6 +12,7 @@ from apsgraph.workbench import (
     BASIC_TYPES,
     WorkbenchServer,
     child_nodes,
+    enum_groups,
     node_detail,
     search_group,
     serve_workbench,
@@ -33,6 +34,7 @@ FIXTURE_FILES = {
 <schema id="DemoDict" package="demo.dict">
   <complexType id="CustomerInfo" dict="true" longname="客户信息">
     <element id="name" type="Base.U_NAME"/>
+    <element id="status" type="Base.U_STATUS"/>
   </complexType>
 </schema>
 """,
@@ -66,7 +68,12 @@ FIXTURE_FILES = {
     <output><fields><field id="out1" type="string"/></fields></output>
   </interface>
   <flow>
-    <service id="step_open" serviceName="DemoSvc.openAccount" longname="调用开户"/>
+    <method id="chk" method="checkInput" longname="输入检查"/>
+    <case id="byType" longname="按类型分支">
+      <when id="whenA" longname="类型A" test="type == 'A'">
+        <service id="step_open" serviceName="DemoSvc.openAccount" longname="调用开户"/>
+      </when>
+    </case>
     <service id="step_tran" transactionId="missingTran"/>
   </flow>
 </flowtran>
@@ -79,12 +86,14 @@ FIXTURE_FILES = {
     "batch/step.batchStep.xml": """<?xml version="1.0"?>
 <batchStepGroup id="demoStep" longname="演示批量步骤" package="demo.batch"/>
 """,
-    "err/ErrCode.error.xml": """<?xml version="1.0"?>
-<schema id="ErrCode" package="demo.err">
-  <complexType id="SysError" dict="true" longname="系统错误码">
-    <enumeration id="E001" value="E001" longname="系统异常"/>
-  </complexType>
-</schema>
+    # 真实工程 .error.xml 为 errorConf 根，errors 分组下挂 error 明细
+    "err/MdError.error.xml": """<?xml version="1.0"?>
+<errorConf id="MdError" longname="介质错误码定义">
+  <errors id="Cuce" longname="客户凭证错误信息">
+    <error id="E0002" type="error" message="凭证种类不存在"/>
+    <error id="E0003" type="error" message="密码错误次数已超限"/>
+  </errors>
+</errorConf>
 """,
 }
 
@@ -129,18 +138,29 @@ class WorkbenchQueryTest(WorkbenchTestBase):
         all_dims = search_group(self.conn, "table", query="demo_user")
         self.assertEqual(1, all_dims["total"])
 
+    def test_substring_like_search_with_escaped_wildcards(self):
+        # 部分英文子串（含下划线）必须按字面匹配，不能当通配符
+        substring = search_group(self.conn, "table", query="o_user", dimension="id")
+        self.assertEqual(1, substring["total"])
+        self.assertEqual("demo_user", substring["results"][0]["raw_id"])
+
     def test_group_kind_filters(self):
         tables = search_group(self.conn, "table")
         self.assertGreaterEqual(tables["total"], 1)
         self.assertTrue(all(item["kind"] == "TABLE" for item in tables["results"]))
 
-        complex_types = search_group(self.conn, "complex_type")
-        self.assertEqual(0, complex_types["total"])
-
         enums = search_group(self.conn, "enum", query="有效")
         self.assertEqual(1, enums["total"])
         self.assertEqual("有效", enums["results"][0]["chinese_name"])
         self.assertEqual("Base.U_STATUS", enums["results"][0]["owner_full_id"])
+
+        operations = search_group(self.conn, "service_operation", query="openAccount", dimension="id")
+        self.assertEqual(1, operations["total"])
+        self.assertEqual("DemoSvc.openAccount", operations["results"][0]["full_id"])
+
+        elements = search_group(self.conn, "dict_element", query="CustomerInfo.name", dimension="fullid")
+        self.assertEqual(1, elements["total"])
+        self.assertEqual("DemoDict.CustomerInfo.name", elements["results"][0]["full_id"])
 
     def test_dictionary_and_error_code_split_by_suffix(self):
         dictionaries = search_group(self.conn, "dictionary")
@@ -148,10 +168,16 @@ class WorkbenchQueryTest(WorkbenchTestBase):
         self.assertEqual("DemoDict.CustomerInfo", dictionaries["results"][0]["full_id"])
         self.assertTrue(dictionaries["results"][0]["file_path"].endswith(".d_schema.xml"))
 
+        # 真实工程 .error.xml 为 errorConf（kind ERRORCONF）
         errors = search_group(self.conn, "error_code")
         self.assertEqual(1, errors["total"])
-        self.assertEqual("ErrCode.SysError", errors["results"][0]["full_id"])
+        self.assertEqual("MdError.MdError", errors["results"][0]["full_id"])
+        self.assertEqual("ERRORCONF", errors["results"][0]["kind"])
         self.assertTrue(errors["results"][0]["file_path"].endswith(".error.xml"))
+
+        # 错误码按 message 模糊搜索（desc 维度包含 message）
+        by_message = search_group(self.conn, "error_code", query="密码错误", dimension="desc")
+        self.assertEqual(1, by_message["total"])
 
     def test_browse_mode_and_pagination(self):
         page1 = search_group(self.conn, "table", page=1, page_size=1)
@@ -174,9 +200,10 @@ class WorkbenchQueryTest(WorkbenchTestBase):
         self.assertIn("SERVICE_TYPE", groups)
         self.assertIn("TRANSACTION", groups)
         self.assertIn("BATCH_TRANSACTION", groups)
+        self.assertIn("ERRORCONF", groups)
 
         schemas = search_group(self.conn, "top", root_kind="SCHEMA")
-        self.assertEqual(4, schemas["total"])  # Base / DemoDict / DemoTables / ErrCode
+        self.assertEqual(3, schemas["total"])  # Base / DemoDict / DemoTables
 
         every_top = search_group(self.conn, "top")
         self.assertEqual(sum(groups.values()), every_top["total"])
@@ -199,30 +226,58 @@ class WorkbenchQueryTest(WorkbenchTestBase):
         self.assertEqual(["custName"], [f["raw_id"] for f in operation["input"]])
         self.assertEqual(["result"], [f["raw_id"] for f in operation["output"]])
 
-    def test_transaction_detail_flow_and_edges(self):
+        # 服务页直接查服务操作（fullId = 服务文件.服务id）
+        operation_detail = node_detail(self.conn, "DemoSvc.openAccount")["detail"]
+        self.assertEqual(["custName"], [f["raw_id"] for f in operation_detail["input"]])
+        self.assertEqual(["result"], [f["raw_id"] for f in operation_detail["output"]])
+
+    def test_transaction_detail_flow_tree_and_branches(self):
         tran = search_group(self.conn, "transaction", query="demoTran", dimension="id")
         payload = node_detail(self.conn, tran["results"][0]["stable_id"])
         detail = payload["detail"]
         self.assertEqual(["in1"], [f["raw_id"] for f in detail["input"]])
         self.assertEqual(["out1"], [f["raw_id"] for f in detail["output"]])
-        self.assertEqual(["step_open", "step_tran"], [step["raw_id"] for step in detail["flow_steps"]])
-        steps = {step["raw_id"]: step for step in detail["flow_steps"]}
-        self.assertEqual("DemoSvc.openAccount", steps["step_open"]["raw_target"])
-        self.assertIsNotNone(steps["step_open"]["resolved_target"])
-        self.assertIsNone(steps["step_tran"]["resolved_target"])
 
-        # the flow call target resolves to the service operation detail via full_id
-        resolved = node_detail(self.conn, "DemoSvc.openAccount")
-        self.assertEqual("DemoSvc.openAccount", resolved["node"]["full_id"])
+        steps = detail["flow_steps"]
+        self.assertEqual(["method", "case", "service"], [step["xml_tag"] for step in steps])
+        self.assertEqual("checkInput", steps[0]["label"])
+        self.assertEqual("missingTran", steps[2]["label"])
+        self.assertIsNone(steps[2]["resolved_target"])
+
+        case = steps[1]
+        self.assertEqual("按类型分支", case["label"])
+        when = case["children"][0]
+        self.assertEqual("when", when["xml_tag"])
+        self.assertEqual("type == 'A'", when["test"])
+        branch_service = when["children"][0]
+        self.assertEqual("DemoSvc.openAccount", branch_service["label"])
+        self.assertIsNotNone(branch_service["resolved_target"])
 
     def test_error_code_and_dictionary_detail(self):
         errors = search_group(self.conn, "error_code")
         detail = node_detail(self.conn, errors["results"][0]["stable_id"])["detail"]
-        self.assertEqual(["E001"], [item["properties"]["value"] for item in detail["enum_values"]])
+        self.assertEqual(1, len(detail["groups"]))
+        group = detail["groups"][0]
+        self.assertEqual("Cuce", group["node"]["raw_id"])
+        self.assertEqual(["E0002", "E0003"], [item["raw_id"] for item in group["errors"]])
+        self.assertEqual("凭证种类不存在", group["errors"][0]["properties"]["message"])
 
         dicts = search_group(self.conn, "dictionary")
         dict_detail = node_detail(self.conn, dicts["results"][0]["stable_id"])["detail"]
-        self.assertEqual(["name"], [item["raw_id"] for item in dict_detail["elements"]])
+        self.assertEqual(["name", "status"], [item["raw_id"] for item in dict_detail["elements"]])
+
+    def test_enum_master_and_restriction_detail(self):
+        enums = enum_groups(self.conn)
+        self.assertEqual(1, enums["total"])
+        owner = enums["results"][0]
+        self.assertEqual("Base.U_STATUS", owner["full_id"])
+        self.assertEqual(2, owner["value_count"])
+
+        matched = enum_groups(self.conn, query="U_STATUS")
+        self.assertEqual(1, matched["total"])
+
+        detail = node_detail(self.conn, owner["stable_id"])["detail"]
+        self.assertEqual(["A", "I"], [item["raw_id"] for item in detail["enum_values"]])
 
     def test_child_nodes_tree(self):
         schemas = search_group(self.conn, "top", root_kind="SCHEMA")
@@ -289,14 +344,18 @@ class WorkbenchHttpTest(WorkbenchTestBase):
         self.assertEqual(200, status)
         self.assertEqual(29, len(json.loads(body)["results"]))
 
-        status, body = self._get("/api/search?group=error_code")
-        payload = json.loads(body)
-        stable_id = payload["results"][0]["stable_id"]
-        status, body = self._get("/api/node?id=" + urllib.request.quote(stable_id))
+        status, body = self._get("/api/enums?q=U_STATUS")
+        self.assertEqual(200, status)
+        enums = json.loads(body)
+        self.assertEqual(1, enums["total"])
+        self.assertEqual(2, enums["results"][0]["value_count"])
+
+        status, body = self._get("/api/node?id=" + urllib.request.quote("MdError.MdError"))
         self.assertEqual(200, status)
         detail = json.loads(body)
-        self.assertEqual("DICTIONARY", detail["node"]["kind"])
-        self.assertEqual(["E001"], [item["properties"]["value"] for item in detail["detail"]["enum_values"]])
+        self.assertEqual("ERRORCONF", detail["node"]["kind"])
+        self.assertEqual(["E0002", "E0003"],
+                         [item["raw_id"] for item in detail["detail"]["groups"][0]["errors"]])
 
         status, body = self._get("/api/node?id=DemoSvc.openAccount")
         self.assertEqual(200, status)

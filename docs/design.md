@@ -1,7 +1,7 @@
 # APSGraph 设计文档
 
-> 版本：0.19.0
-> 更新时间：2026-09-15  
+> 版本：0.20.0
+> 更新时间：2026-09-16  
 > 文档定位：说明 APSGraph 的关键架构、模块设计、数据模型、算法、并发模型、性能设计和安全边界。
 
 ---
@@ -83,13 +83,14 @@
 
 ### 3.5.1 查询工作台（workbench）
 
-`apsgraph workbench` 用标准库 `http.server.ThreadingHTTPServer` 在 `127.0.0.1` 提供只读查询页面与 JSON API（`/api/search`、`/api/node`、`/api/children`、`/api/top-groups`、`/api/basetypes`、`/api/stats`）：
+`apsgraph workbench` 用标准库 `http.server.ThreadingHTTPServer` 在 `127.0.0.1` 提供只读查询页面与 JSON API（`/api/search`、`/api/enums`、`/api/node`、`/api/children`、`/api/top-groups`、`/api/basetypes`、`/api/stats`）：
 
-- 查询分组由 `KIND_GROUPS` 定义：枚举（ENUM_VALUE）、数据字典与错误码（同为 DICTIONARY，按 `model_files.suffix` 的 `.d_schema.xml` / `.error.xml` 区分）、复合类型、表、服务、交易、批量交易；顶层模型页按 `owner_node_id IS NULL` 过滤并可按 kind 再过滤。
-- 模糊搜索复用 `store` 的 FTS5 中文 ngram 分词，维度 `id/fullid/longname/desc` 映射为 FTS5 列过滤（`col : (...)`），空关键字退化为分页浏览。
-- 详情装配用递归 CTE 沿 `owner_node_id` 收集子结构：表的字段/索引/ODB 索引/序列，服务操作的输入输出（`input`/`output` 容器为无 id 穿透节点，需在子树中定位），交易的输入输出与 flow 步骤（`serviceName`/`transactionId` 以 full_id/raw_id 兜底解析为可跳转目标），字典与错误码的枚举值明细。
+- 查询分组由 `KIND_GROUPS` 定义：枚举值（ENUM_VALUE）、数据字典（DICTIONARY，`.d_schema.xml`）、错误码（真实工程 `.error.xml` 为 `errorConf` 根，kind ERRORCONF，详情按 `errors>error` 分组展示 message 明细并支持按 message 搜索）、复合类型、字典数据项（ELEMENT，粒度为 `BpDict.E.entp_scale` 这类数据项 fullId）、表、服务文件（SERVICE_TYPE）、服务（SERVICE_OPERATION，fullId 形如 `ApBatchFileService.smtbat`）、交易、批量交易；顶层模型页按 `owner_node_id IS NULL` 过滤并可按 kind 再过滤。
+- 模糊搜索为子串匹配（SQL LIKE，`%`/`_` 转义为字面值），维度 `id/fullid/longname/desc` 分别命中 `raw_id`/`full_id` 与 `properties_json` 中的 `longname/name`/`description/desc/remark/message`（desc 维度包含 message 以支持错误码搜索）；空关键字退化为分页浏览。
+- 枚举页为主从布局：`/api/enums` 按 ENUM_VALUE 的 owner（restrictionType 等）聚合出枚举列表（含枚举值数量），详情展示全部枚举值。
+- 详情装配用递归 CTE 沿 `owner_node_id` 收集子结构：表的字段/索引/ODB 索引/序列，服务操作的输入输出（`input`/`output` 容器为无 id 穿透节点，需在子树中定位），交易的输入输出与 flow 编排树——真实 FlowTran 的 flow 混合 `method` 直调步骤与 `case>when>service` 分支（when 带 `test` 表达式），服务端递归构建 flow 树、前端用 mermaid 渲染流程图（分支边标注 when 条件，CDN 不可用时降级为缩进列表），`serviceName`/`transactionId` 以 full_id/raw_id 兜底解析为可跳转目标；错误码按 `errors` 分组展示 `error` 明细。
 - 基础类型页数据为内置 APS SimpleType 清单（与 `docs/aps-type-database-mapping.md` 基线一致），不依赖索引。
-- 前端为 `workbench_static/` 下的单页应用（vanilla HTML/JS/CSS），随 wheel 以 package-data 分发；结果分页（每页 50）、子孙树懒加载。
+- 前端为 `workbench_static/` 下的单页应用（vanilla HTML/JS/CSS），随 wheel 以 package-data 分发；结果分页（每页 50）、子孙树懒加载；结果列表只展示 `fullId/id：中文名`，详情属性过滤带命名空间的 XML 属性（如 `xsi:noNamespaceSchemaLocation`）。
 
 ### 3.6 原始 XML 与语义节点索引
 

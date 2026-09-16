@@ -1,15 +1,17 @@
-/* APSGraph 元数据查询工作台前端（vanilla JS，无第三方依赖） */
+/* APSGraph 元数据查询工作台前端（vanilla JS，无第三方依赖；mermaid 走 CDN，离线自动降级为列表） */
 "use strict";
 
 const PAGES = [
   { id: "top", label: "顶层模型", group: "top" },
   { id: "table", label: "表", group: "table" },
-  { id: "service", label: "服务", group: "service" },
+  { id: "service_file", label: "服务文件", group: "service" },
+  { id: "service", label: "服务", group: "service_operation" },
   { id: "transaction", label: "交易 flowtran", group: "transaction" },
   { id: "batch", label: "批量交易", group: "batch", kindSelect: true },
   { id: "complex_type", label: "复合类型", group: "complex_type" },
+  { id: "dict_element", label: "字典数据项", group: "dict_element" },
   { id: "dictionary", label: "数据字典", group: "dictionary" },
-  { id: "enum", label: "枚举类型", group: "enum" },
+  { id: "enum", label: "枚举类型", group: "enum", enumMaster: true },
   { id: "error_code", label: "错误码", group: "error_code" },
   { id: "basetype", label: "基础类型", group: "basetype" },
 ];
@@ -80,11 +82,19 @@ async function runSearch() {
   const query = $("#query").value.trim();
   state.query = query;
   state.dimension = $("#dimension").value;
-  const params = { group: state.group, q: query, field: state.dimension, page: state.page };
-  if (state.group === "batch" && $("#kind-select").value) {
-    params.kinds = $("#kind-select").value;
-  }
   try {
+    if (PAGES.find((p) => p.id === state.pageId).enumMaster) {
+      const payload = await api("/api/enums", { q: query, page: state.page });
+      state.total = payload.total || 0;
+      state.pageSize = payload.page_size || 50;
+      renderEnumMaster(payload.results);
+      updatePager();
+      return;
+    }
+    const params = { group: state.group, q: query, field: state.dimension, page: state.page };
+    if (state.group === "batch" && $("#kind-select").value) {
+      params.kinds = $("#kind-select").value;
+    }
     const payload = await api("/api/search", params);
     state.total = payload.total || 0;
     state.pageSize = payload.page_size || 50;
@@ -98,17 +108,26 @@ function renderResults(payload) {
   const meta = $("#results-meta");
   const body = $("#results-body");
   const groupLabel = PAGES.find((p) => p.group === state.group).label;
-  if (state.group === "basetype") { renderBasetypes(payload.results); meta.textContent = `基础类型（APS SimpleType 内置清单）`; updatePager(); return; }
+  if (state.group === "basetype") {
+    renderBasetypes(payload.results);
+    meta.textContent = "基础类型（APS SimpleType 内置清单）";
+    updatePager(); return;
+  }
   meta.textContent = `${groupLabel}：共 ${payload.total} 条` +
     (state.query ? `，匹配 “${state.query}”` : "，浏览全部");
   if (!payload.results.length) {
     body.innerHTML = `<div class="empty-tip">没有匹配的记录。</div>`;
     updatePager(); return;
   }
-  if (state.group === "enum") { renderEnumResults(payload.results); updatePager(); return; }
   if (state.group === "top") { renderTopResults(payload.results); updatePager(); return; }
   renderTableResults(payload.results);
   updatePager();
+}
+
+/* 结果列只保留 fullId/id：中文名，其余信息在详情面板查看 */
+function displayName(item) {
+  const id = item.full_id || item.raw_id || item.stable_id;
+  return item.chinese_name ? `${id}：${item.chinese_name}` : id;
 }
 
 function renderBasetypes(items) {
@@ -123,14 +142,8 @@ function renderBasetypes(items) {
 
 function renderTableResults(items) {
   const rows = items.map((item) => `<tr data-id="${esc(item.stable_id)}">
-    <td><span class="kind-badge">${esc(item.kind)}</span></td>
-    <td class="ellipsis" title="${esc(item.full_id)}">${esc(item.full_id || item.raw_id)}</td>
-    <td class="ellipsis">${esc(item.chinese_name)}</td>
-    <td class="ellipsis muted">${esc(item.description)}</td>
-    <td class="ellipsis muted" title="${esc(item.file_path)}">${esc(item.file_path)}</td></tr>`).join("");
-  $("#results-body").innerHTML = `<table class="result-table">
-    <thead><tr><th>类型</th><th>fullId / id</th><th>中文名</th><th>描述</th><th>来源文件</th></tr></thead>
-    <tbody>${rows}</tbody></table>`;
+    <td class="ellipsis" title="${esc(item.full_id)}">${esc(displayName(item))}</td></tr>`).join("");
+  $("#results-body").innerHTML = `<table class="result-table"><tbody>${rows}</tbody></table>`;
   bindRowClick();
 }
 
@@ -143,37 +156,28 @@ function renderTopResults(items) {
   let html = "";
   for (const [kind, groupItems] of [...byKind.entries()].sort()) {
     html += `<div class="result-group-title">${esc(kind)}（${groupItems.length}）</div>`;
-    html += `<table class="result-table"><thead><tr><th>fullId / id</th><th>中文名</th><th>来源文件</th></tr></thead><tbody>` +
+    html += `<table class="result-table"><tbody>` +
       groupItems.map((item) => `<tr data-id="${esc(item.stable_id)}">
-        <td class="ellipsis" title="${esc(item.full_id)}">${esc(item.full_id || item.raw_id)}</td>
-        <td class="ellipsis">${esc(item.chinese_name)}</td>
-        <td class="ellipsis muted" title="${esc(item.file_path)}">${esc(item.file_path)}</td></tr>`).join("") +
+        <td class="ellipsis" title="${esc(item.full_id)}">${esc(displayName(item))}</td></tr>`).join("") +
       `</tbody></table>`;
   }
   $("#results-body").innerHTML = html;
   bindRowClick();
 }
 
-function renderEnumResults(items) {
-  const groups = new Map();
-  for (const item of items) {
-    const key = item.owner_id || "(无所属枚举)";
-    if (!groups.has(key)) groups.set(key, { title: item.owner_full_id || key, name: item.owner_name || "", values: [] });
-    groups.get(key).values.push(item);
+/* 枚举类型页：左（中）列枚举 Fullid，点击右侧展示枚举详情与枚举值 */
+function renderEnumMaster(items) {
+  const meta = $("#results-meta");
+  meta.textContent = `枚举类型：共 ${state.total} 个枚举` +
+    (state.query ? `，匹配 “${state.query}”` : "");
+  if (!items.length) {
+    $("#results-body").innerHTML = `<div class="empty-tip">没有匹配的枚举。</div>`;
+    return;
   }
-  let html = "";
-  for (const [ownerId, group] of groups) {
-    html += `<div class="result-group-title" data-owner="${esc(ownerId)}">` +
-      `${esc(group.title)}${group.name ? " · " + esc(group.name) : ""}（${group.values.length} 个枚举值）</div>`;
-    html += `<table class="result-table"><thead><tr><th>枚举值</th><th>值</th><th>中文名</th><th>描述</th></tr></thead><tbody>` +
-      group.values.map((item) => `<tr data-id="${esc(item.stable_id)}">
-        <td class="ellipsis">${esc(item.raw_id)}</td>
-        <td>${esc((item.properties || {}).value)}</td>
-        <td class="ellipsis">${esc(item.chinese_name)}</td>
-        <td class="ellipsis muted">${esc(item.description)}</td></tr>`).join("") +
-      `</tbody></table>`;
-  }
-  $("#results-body").innerHTML = html;
+  const rows = items.map((item) => `<tr data-id="${esc(item.stable_id)}">
+    <td class="ellipsis" title="${esc(item.full_id)}">${esc(item.full_id || item.raw_id)}${item.chinese_name ? "：" + esc(item.chinese_name) : ""}
+      <span class="kind-badge">${item.value_count} 值</span></td></tr>`).join("");
+  $("#results-body").innerHTML = `<table class="result-table"><tbody>${rows}</tbody></table>`;
   bindRowClick();
 }
 
@@ -197,7 +201,8 @@ function updatePager() {
 /* ---------- 详情 ---------- */
 function propGrid(props, keys) {
   const list = keys || Object.keys(props || {}).sort();
-  const rows = list.filter((key) => props[key] !== undefined && props[key] !== "")
+  // 过滤带命名空间的 XML 属性（如 {http://www.w3.org/2001/XMLSchema-instance}noNamespaceSchemaLocation）
+  const rows = list.filter((key) => !key.includes("{") && props[key] !== undefined && props[key] !== "")
     .map((key) => `<span class="k">${esc(key)}</span><span class="v">${esc(props[key])}</span>`).join("");
   return rows ? `<div class="props-grid">${rows}</div>` : "";
 }
@@ -235,10 +240,79 @@ function edgeSection(title, edges) {
   return section(title, `<ul class="edge-list">${items}</ul>`);
 }
 
+/* ---------- 流程编排 mermaid 渲染 ---------- */
+function cleanMermaidLabel(value) {
+  return String(value == null ? "" : value)
+    .replace(/"/g, "#quot;").replace(/[\[\]|<>()]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function buildMermaidCode(steps) {
+  const lines = ["flowchart TD", `S(["开始"])`];
+  let seq = 0;
+  const leaves = [];
+  function walk(nodes, parentId) {
+    let last = parentId;
+    for (const node of nodes) {
+      const id = `N${seq++}`;
+      const isCase = node.xml_tag === "case";
+      const base = node.label || node.raw_id || "";
+      const text = cleanMermaidLabel(base === node.longname ? base : `${base} ${node.longname || ""}`);
+      if (isCase) {
+        lines.push(`${last} --> ${id}{"${text}"}`);
+      } else {
+        let edgeText = "";
+        if (node.xml_tag === "when") {
+          edgeText = cleanMermaidLabel(node.longname || node.test).slice(0, 40);
+        }
+        lines.push(`${last} -->${edgeText ? `|${edgeText}|` : ""} ${id}["${text}"]`);
+      }
+      if (node.children && node.children.length) {
+        walk(node.children, id);
+      } else {
+        leaves.push(id);
+      }
+      last = id;
+    }
+    return last;
+  }
+  walk(steps, "S");
+  lines.push(`E(["结束"])`);
+  for (const leaf of (leaves.length ? leaves : ["S"])) lines.push(`${leaf} --> E`);
+  return lines.join("\n");
+}
+
+function flowTreeList(steps) {
+  if (!steps || !steps.length) return `<div class="muted">（无）</div>`;
+  function render(nodes) {
+    return `<ul>` + nodes.map((node) => {
+      const target = node.resolved_target
+        ? `<a class="node-link" data-id="${esc(node.resolved_target)}">${esc(node.label || node.raw_id)}</a>`
+        : esc(node.label || node.raw_id);
+      const test = node.test ? ` <span class="muted">test: ${esc(node.test)}</span>` : "";
+      return `<li class="tree-node"><span class="kind-badge">${esc(node.xml_tag || node.kind)}</span> ${target}${test}` +
+        (node.children && node.children.length ? flowTreeList(node.children) : "") + `</li>`;
+    }).join("") + `</ul>`;
+  }
+  return `<div class="tree">` + render(steps) + `</div>`;
+}
+
+async function renderFlow(steps, holder) {
+  const fallback = flowTreeList(steps);
+  if (typeof window.mermaid === "undefined") { holder.innerHTML = fallback; return; }
+  try {
+    window.mermaid.initialize({ startOnLoad: false, securityLevel: "strict" });
+    const { svg } = await window.mermaid.render(`flow-${Date.now()}`, buildMermaidCode(steps));
+    holder.innerHTML = svg + `<details><summary>列表视图</summary>${fallback}</details>`;
+    holder.querySelectorAll("a.node-link").forEach((link) =>
+      link.addEventListener("click", () => showDetail(link.dataset.id)));
+  } catch (error) {
+    holder.innerHTML = fallback;
+  }
+}
+
 function renderDetailSections(data) {
   const node = data.node;
   const detail = data.detail || {};
-  const props = node.properties || {};
   let html = "";
   if (node.kind === "TABLE") {
     html += section("字段（fields）", fieldsTable(detail.fields));
@@ -256,30 +330,28 @@ function renderDetailSections(data) {
         section("输出（output）", fieldsTable(op.output)));
     }
     if (!detail.operations || !detail.operations.length) html += section("服务操作", `<div class="muted">（无）</div>`);
+  } else if (node.kind === "SERVICE_OPERATION") {
+    html += section("输入（input）", fieldsTable(detail.input));
+    html += section("输出（output）", fieldsTable(detail.output));
   } else if (node.kind === "TRANSACTION") {
     html += section("输入（input）", fieldsTable(detail.input));
     html += section("输出（output）", fieldsTable(detail.output));
-    const steps = (detail.flow_steps || []).map((step) => {
-      const propsStep = step.properties || {};
-      const target = propsStep.serviceName || propsStep.transactionId || propsStep.transaction || "";
-      const inner = `${esc(step.raw_id || "")} ${target ? "→ " : ""}` +
-        (target ? nodeLink({ stable_id: target, full_id: target, resolved: true }, target) : "") +
-        (propsStep.longname ? ` <span class="muted">${esc(propsStep.longname)}</span>` : "");
-      return `<div class="flow-step">${inner}</div>`;
-    }).join("");
-    html += section("流程编排（flow）", steps || `<div class="muted">（无）</div>`);
+    const steps = detail.flow_steps || [];
+    html += section("流程编排（flow）", `<div class="flow-holder">${steps.length ? "渲染中…" : `<div class="muted">（无）</div>`}</div>`);
   } else if (node.kind === "BATCH_TRANSACTION") {
     html += section("输入字段", fieldsTable(detail.input));
     if (detail.steps && detail.steps.length) html += section("批量步骤", fieldsTable(detail.steps, ["raw_id", "full_id", "longname"]));
     if (detail.groups && detail.groups.length) html += section("步骤组", fieldsTable(detail.groups, ["raw_id", "full_id", "longname"]));
-  } else if (node.kind === "DICTIONARY") {
+  } else if (node.kind === "ERRORCONF") {
+    for (const group of detail.groups || []) {
+      const title = group.node ? `错误分组：${group.node.raw_id} ${group.node.properties && group.node.properties.longname ? "· " + esc(group.node.properties.longname) : ""}` : "错误码";
+      html += section(title, fieldsTable(group.errors, ["raw_id", "type", "message"]));
+    }
+    if (!detail.groups || !detail.groups.length) html += section("错误码", `<div class="muted">（无）</div>`);
+  } else if (node.kind === "DICTIONARY" || node.kind === "COMPLEX_TYPE" || node.kind === "RESTRICTION_TYPE") {
     if (detail.elements && detail.elements.length) html += section("数据项（element）", fieldsTable(detail.elements));
     if (detail.enum_values && detail.enum_values.length)
-      html += section(node.file_path && node.file_path.endsWith(".error.xml") ? "错误码明细" : "枚举值",
-        fieldsTable(detail.enum_values, ["raw_id", "value", "longname", "description"]));
-  } else if (node.kind === "COMPLEX_TYPE") {
-    if (detail.elements && detail.elements.length) html += section("数据项（element）", fieldsTable(detail.elements));
-    if (detail.enum_values && detail.enum_values.length) html += section("枚举值", fieldsTable(detail.enum_values, ["raw_id", "value", "longname", "description"]));
+      html += section("枚举值", fieldsTable(detail.enum_values, ["raw_id", "value", "longname", "description"]));
   }
   return html;
 }
@@ -337,6 +409,8 @@ async function showDetail(nodeRef) {
       link.addEventListener("click", () => showDetail(link.dataset.id)));
     const tree = pane.querySelector(".tree");
     if (tree) bindTree(tree);
+    const flowHolder = pane.querySelector(".flow-holder");
+    if (flowHolder && (data.detail || {}).flow_steps) await renderFlow(data.detail.flow_steps, flowHolder);
   } catch (error) {
     pane.innerHTML = `<div class="error-banner">${esc(error.message)}</div>`;
   }

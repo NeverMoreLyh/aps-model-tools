@@ -19,7 +19,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import parse_qs, urlparse
 
 from .store import (
-    NODE_SELECT, _fts_query, _row_to_dict, connect, find_nodes, get_stats, references,
+    NODE_SELECT, _row_to_dict, connect, find_nodes, get_stats, references,
 )
 
 WORKBENCH_PORT = 8321
@@ -34,22 +34,34 @@ STATIC_DIR = Path(__file__).resolve().parent / "workbench_static"
 KIND_GROUPS: Dict[str, Dict[str, Any]] = {
     "enum": {"kinds": {"ENUM_VALUE"}},
     "dictionary": {"kinds": {"DICTIONARY"}, "suffix": ".d_schema.xml"},
-    "error_code": {"kinds": {"DICTIONARY"}, "suffix": ".error.xml"},
+    # Real-world .error.xml files are errorConf roots (kind ERRORCONF), not
+    # dictionaries; their detail carries errors>error message definitions.
+    "error_code": {"kinds": {"ERRORCONF"}, "suffix": ".error.xml"},
     "complex_type": {"kinds": {"COMPLEX_TYPE"}},
+    "dict_element": {"kinds": {"ELEMENT"}},
     "table": {"kinds": {"TABLE"}},
     "service": {"kinds": {"SERVICE_TYPE"}},
+    "service_operation": {"kinds": {"SERVICE_OPERATION"}},
     "transaction": {"kinds": {"TRANSACTION"}},
     "batch": {"kinds": {"BATCH_TRANSACTION"},
               "extra_kinds": {"FILE_BATCH_TRANSACTION", "BATCH_STEP", "BATCH_GROUP"}},
 }
 
-# id/fullid/longname/desc search dimensions mapped onto FTS5 columns.
-DIMENSION_COLUMNS = {
-    "id": "raw_id",
-    "fullid": "full_id",
-    "longname": "longname",
-    "desc": "description",
+# Substring (LIKE) search dimensions.  Unlike FTS5 token matching, LIKE gives
+# true fuzzy semantics for partial English identifiers ("openAcc" matches
+# "DemoSvc.openAccount") and for short Chinese substrings alike.  ``message``
+# is included so error-code pages can be searched by their message text.
+LIKE_COLUMNS: Dict[str, List[str]] = {
+    "id": ["n.raw_id"],
+    "fullid": ["n.full_id"],
+    "longname": ["json_extract(n.properties_json,'$.longname')",
+                 "json_extract(n.properties_json,'$.name')"],
+    "desc": ["json_extract(n.properties_json,'$.description')",
+             "json_extract(n.properties_json,'$.desc')",
+             "json_extract(n.properties_json,'$.remark')",
+             "json_extract(n.properties_json,'$.message')"],
 }
+LIKE_COLUMNS[""] = sorted({column for columns in LIKE_COLUMNS.values() for column in columns})
 
 # APS SimpleType built-in base types with their database column mappings
 # (docs/aps-type-database-mapping.md, APS 6.51.173 baseline).
@@ -86,6 +98,15 @@ BASIC_TYPES: List[Dict[str, str]] = [
 ]
 
 
+def _like_clause(query: str, dimension: str) -> Tuple[str, List[Any]]:
+    columns = LIKE_COLUMNS.get(dimension)
+    if columns is None:
+        raise ValueError(f"unknown search dimension: {dimension}")
+    escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    clause = " or ".join(f"{column} like ? escape '\\'" for column in columns)
+    return f"({clause})", [f"%{escaped}%"] * len(columns)
+
+
 def _group_kinds(group: str, requested_kinds: Optional[List[str]]) -> List[str]:
     config = KIND_GROUPS[group]
     if requested_kinds and config.get("extra_kinds"):
@@ -94,16 +115,6 @@ def _group_kinds(group: str, requested_kinds: Optional[List[str]]) -> List[str]:
         if allowed:
             return allowed
     return sorted(config["kinds"])
-
-
-def _fts_column_query(query: str, dimension: str) -> str:
-    inner = _fts_query(query)
-    if not inner:
-        return ""
-    column = DIMENSION_COLUMNS.get(dimension)
-    if column is None:
-        return inner
-    return f"{column} : ({inner})"
 
 
 def _group_filters(group: str, kinds: List[str], root_kind: str = "") -> Tuple[str, List[Any]]:
@@ -146,7 +157,7 @@ def search_group(conn: sqlite3.Connection, group: str, query: str = "", dimensio
     """Search (or browse when query is empty) one workbench page group."""
     if group not in KIND_GROUPS and group not in {"top", "basetype"}:
         raise ValueError(f"unknown query group: {group}")
-    if dimension and dimension not in DIMENSION_COLUMNS:
+    if dimension and dimension not in LIKE_COLUMNS:
         raise ValueError(f"unknown search dimension: {dimension}")
     page_size = max(1, min(int(page_size), MAX_PAGE_SIZE))
     page = max(1, int(page))
@@ -162,38 +173,58 @@ def search_group(conn: sqlite3.Connection, group: str, query: str = "", dimensio
     offset = (page - 1) * page_size
     selected = _group_kinds(group, kinds) if group in KIND_GROUPS else []
     where, params = _group_filters(group, selected, root_kind)
-
     if query:
-        match = _fts_column_query(query, dimension)
-        if not match:
-            return {"group": group, "query": query, "total": 0, "page": page,
-                    "page_size": page_size, "results": []}
-        base = ("from model_search join nodes n on n.id=cast(model_search.node_id as integer) "
-                "join model_files f on f.id=n.file_id "
-                "left join nodes owner on owner.id=n.owner_node_id "
-                "where model_search match ?" + where)
-        total = conn.execute(f"select count(*) {base}",
-                             [match, *params]).fetchone()[0]
-        rows = conn.execute(
-            f"""select n.id,n.stable_id,n.kind,n.raw_id,n.full_id,
-            owner.stable_id as owner_id,n.owner_node_id,owner.full_id as owner_full_id,
-            json_extract(owner.properties_json,'$.longname') as owner_name,
-            f.path as file_path,n.file_id,n.xml_tag,n.properties_json {base}
-            order by bm25(model_search), n.kind, n.full_id, f.path limit ? offset ?""",
-            [match, *params, page_size, offset]).fetchall()
-    else:
-        base = ("from nodes n join model_files f on f.id=n.file_id "
-                "left join nodes owner on owner.id=n.owner_node_id where 1=1" + where)
-        total = conn.execute(f"select count(*) {base}", params).fetchone()[0]
-        rows = conn.execute(
-            f"""select n.id,n.stable_id,n.kind,n.raw_id,n.full_id,
-            owner.stable_id as owner_id,n.owner_node_id,owner.full_id as owner_full_id,
-            json_extract(owner.properties_json,'$.longname') as owner_name,
-            f.path as file_path,n.file_id,n.xml_tag,n.properties_json {base}
-            order by n.kind, n.full_id, f.path limit ? offset ?""",
-            [*params, page_size, offset]).fetchall()
+        like_sql, like_params = _like_clause(query, dimension)
+        conjuncts = [like_sql]
+        if group == "error_code" and dimension in ("", "desc"):
+            # errorConf 本身没有 message；允许命中其下 error 明细的 message
+            escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            conjuncts.append(
+                "exists(select 1 from nodes c1 join nodes c2 on c2.owner_node_id=c1.id "
+                "where (c1.owner_node_id=n.id or c2.owner_node_id=n.id) "
+                "and json_extract(c2.properties_json,'$.message') like ? escape '\\')")
+            params = [*params, f"%{escaped}%"]
+        where = where + " and (" + " or ".join(conjuncts) + ")"
+        params = [*params, *like_params]
+
+    base = ("from nodes n join model_files f on f.id=n.file_id "
+            "left join nodes owner on owner.id=n.owner_node_id where 1=1" + where)
+    total = conn.execute(f"select count(*) {base}", params).fetchone()[0]
+    rows = conn.execute(
+        f"""select n.id,n.stable_id,n.kind,n.raw_id,n.full_id,
+        owner.stable_id as owner_id,n.owner_node_id,owner.full_id as owner_full_id,
+        json_extract(owner.properties_json,'$.longname') as owner_name,
+        f.path as file_path,n.file_id,n.xml_tag,n.properties_json {base}
+        order by n.kind, n.full_id, f.path limit ? offset ?""",
+        [*params, page_size, offset]).fetchall()
     return {"group": group, "query": query, "total": total, "page": page,
             "page_size": page_size, "results": _node_summaries(conn, rows)}
+
+
+def enum_groups(conn: sqlite3.Connection, query: str = "", page: int = 1,
+                page_size: int = PAGE_SIZE) -> Dict[str, Any]:
+    """List the enums (owners of ENUM_VALUE nodes) for the enum master page."""
+    page_size = max(1, min(int(page_size), MAX_PAGE_SIZE))
+    page = max(1, int(page))
+    offset = (page - 1) * page_size
+    base = """from nodes ev join nodes own on own.id=ev.owner_node_id
+              where ev.kind='ENUM_VALUE'"""
+    params: List[Any] = []
+    if query:
+        escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        needle = f"%{escaped}%"
+        base += (" and (own.full_id like ? escape '\\' or own.raw_id like ? escape '\\' or "
+                 "json_extract(own.properties_json,'$.longname') like ? escape '\\')")
+        params = [needle, needle, needle]
+    total = conn.execute(f"select count(distinct own.id) {base}", params).fetchone()[0]
+    rows = conn.execute(
+        f"""select own.id,own.stable_id,own.kind,own.raw_id,own.full_id,
+        json_extract(own.properties_json,'$.longname') as chinese_name,
+        count(ev.id) as value_count {base}
+        group by own.id order by own.full_id limit ? offset ?""",
+        [*params, page_size, offset]).fetchall()
+    return {"query": query, "total": total, "page": page, "page_size": page_size,
+            "results": [dict(row) for row in rows]}
 
 
 def top_groups(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
@@ -309,35 +340,69 @@ def _service_detail(conn: sqlite3.Connection, node_id: int) -> Dict[str, Any]:
     return {"operations": operations}
 
 
+def _flow_tree(conn: sqlite3.Connection, node_id: int, depth: int = 0) -> List[Dict[str, Any]]:
+    """Build the flow orchestration tree under a flow node.
+
+    Real FlowTran flows mix direct ``service``/``method`` steps with
+    ``case``/``when`` branches (when nodes carry a ``test`` expression and
+    contain their own service steps), so this must recurse.
+    """
+    rows = conn.execute(
+        """select n.id,n.stable_id,n.kind,n.raw_id,n.full_id,n.xml_tag,n.properties_json
+        from nodes n where n.owner_node_id=? order by n.id""", (node_id,)).fetchall()
+    steps: List[Dict[str, Any]] = []
+    for row in rows:
+        props = json.loads(row["properties_json"] or "{}")
+        tag = row["xml_tag"]
+        step: Dict[str, Any] = {
+            "stable_id": row["stable_id"], "kind": row["kind"], "raw_id": row["raw_id"],
+            "xml_tag": tag, "longname": str(props.get("longname") or ""),
+            "test": str(props.get("test") or ""), "label": "", "resolved_target": None,
+            "children": [],
+        }
+        if tag == "service":
+            target = str(props.get("serviceName") or props.get("transactionId")
+                         or props.get("transaction") or "")
+            step["label"] = target
+            if target:
+                matches = [item for item in find_nodes(conn, target)
+                           if target in {item["stable_id"], item["full_id"], item["raw_id"]}]
+                if matches:
+                    step["resolved_target"] = matches[0]["stable_id"]
+        elif tag == "method":
+            step["label"] = str(props.get("method") or row["raw_id"])
+        else:
+            step["label"] = str(props.get("longname") or row["raw_id"])
+        if depth < 8 and tag in {"case", "when"}:
+            step["children"] = _flow_tree(conn, row["id"], depth + 1)
+        steps.append(step)
+    return steps
+
+
 def _transaction_detail(conn: sqlite3.Connection, node_id: int) -> Dict[str, Any]:
     interface = _interface_detail(conn, node_id)
     flow_steps: List[Dict[str, Any]] = []
     flow = _container_under(conn, node_id, "flow")
     if flow is not None:
-        rows = conn.execute(
-            """select n.id,n.stable_id,n.kind,n.raw_id,n.full_id,n.xml_tag,n.properties_json
-            from nodes n where n.owner_node_id=? order by n.id""", (flow,)).fetchall()
-        for row in rows:
-            step = _row_to_dict(row)
-            # flow serviceName/transactionId point at other models by full_id;
-            # resolve them so the UI can link straight to the target detail.
-            props = step.get("properties") or {}
-            raw_target = str(props.get("serviceName") or props.get("transactionId")
-                             or props.get("transaction") or "")
-            resolved = None
-            if raw_target:
-                matches = [item for item in find_nodes(conn, raw_target)
-                           if raw_target in {item["stable_id"], item["full_id"], item["raw_id"]}]
-                if matches:
-                    resolved = matches[0]["stable_id"]
-            step["resolved_target"] = resolved
-            step["raw_target"] = raw_target
-            flow_steps.append(step)
+        flow_steps = _flow_tree(conn, flow)
     return {**interface, "flow_steps": flow_steps}
 
 
 def _error_code_detail(conn: sqlite3.Connection, node_id: int) -> Dict[str, Any]:
-    return {"enum_values": _descendants_of_kind(conn, node_id, "ENUM_VALUE")}
+    """errorConf detail: errors groups each carrying their error definitions."""
+    groups = []
+    for group in _descendants_of_kind(conn, node_id, "ERRORS"):
+        rows = conn.execute(
+            """select n.stable_id,n.kind,n.raw_id,n.full_id,n.xml_tag,n.properties_json
+            from nodes n where n.owner_node_id=? order by n.id""", (group["id"],)).fetchall()
+        groups.append({"node": group, "errors": [_row_to_dict(row) for row in rows]})
+    orphans = conn.execute(
+        """select n.stable_id,n.kind,n.raw_id,n.full_id,n.xml_tag,n.properties_json
+        from nodes n where n.owner_node_id=? and n.kind='ERROR' order by n.id""",
+        (node_id,)).fetchall()
+    if orphans:
+        groups.append({"node": None, "errors": [_row_to_dict(row) for row in orphans]})
+    return {"groups": groups}
 
 
 def _dictionary_detail(conn: sqlite3.Connection, node_id: int) -> Dict[str, Any]:
@@ -362,15 +427,17 @@ def _detail_for_kind(conn: sqlite3.Connection, kind: str, node_id: int) -> Dict[
         return _table_detail(conn, node_id)
     if kind == "SERVICE_TYPE":
         return _service_detail(conn, node_id)
+    if kind == "SERVICE_OPERATION":
+        return _interface_detail(conn, node_id)
     if kind == "TRANSACTION":
         return _transaction_detail(conn, node_id)
     if kind == "BATCH_TRANSACTION":
         return _batch_detail(conn, node_id)
+    if kind == "ERRORCONF":
+        return _error_code_detail(conn, node_id)
     if kind == "ENUM_VALUE":
         return {"enum_values": []}
-    if kind == "DICTIONARY":
-        return _dictionary_detail(conn, node_id)
-    if kind == "COMPLEX_TYPE":
+    if kind in {"RESTRICTION_TYPE", "DICTIONARY", "COMPLEX_TYPE"}:
         return {"elements": _descendants_of_kind(conn, node_id, "ELEMENT"),
                 "enum_values": _descendants_of_kind(conn, node_id, "ENUM_VALUE")}
     return {}
@@ -486,6 +553,17 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
                 conn.close()
         elif path == "/api/search":
             self._send_json(self._api_search(params))
+        elif path == "/api/enums":
+            conn = connect(self.db_path, read_only=True)
+            try:
+                self._send_json(enum_groups(
+                    conn,
+                    query=params.get("q", [""])[0],
+                    page=int(params.get("page", ["1"])[0]),
+                    page_size=int(params.get("page_size", [str(PAGE_SIZE)])[0]),
+                ))
+            finally:
+                conn.close()
         elif path == "/api/node":
             self._send_json(self._api_node(params))
         elif path == "/api/children":

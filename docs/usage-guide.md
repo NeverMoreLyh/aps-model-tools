@@ -1,7 +1,7 @@
 # APSGraph 使用说明
 
-> 版本：0.19.0
-> 更新时间：2026-09-15
+> 版本：0.20.0
+> 更新时间：2026-09-16
 > 项目地址：https://github.com/NeverMoreLyh/aps-model-tools
 
 ---
@@ -438,10 +438,12 @@ apsgraph workbench --port 9000 --no-browser
 页面与查询能力：
 
 1. **顶层模型**：按顶层模型类型（SCHEMA / SQL_GROUP / SERVICE_TYPE / TRANSACTION / BATCH_TRANSACTION 等）分组列出所有顶层节点；点击节点在详情面板展示递归包含的子模型树（逐层懒加载展开）。
-2. **类型查询页**：表、服务、交易 flowtran、批量交易（页内可切换 FILE_BATCH_TRANSACTION / BATCH_STEP / BATCH_GROUP）、复合类型、数据字典、枚举类型、错误码。枚举页按所属枚举分组展示枚举值；数据字典与错误码同为 DICTIONARY 节点，按来源文件后缀（`.d_schema.xml` / `.error.xml`）区分。
-3. **基础类型**：内置 APS SimpleType 清单（29 种）及其 MySQL / Oracle / PostgreSQL 列型映射，支持按名称/语义过滤，不依赖索引。
-4. **搜索**：查询框 + 维度下拉，支持按 `id` / `fullId` / `longname` / `desc` 单维度或全部维度模糊搜索（FTS5 + 中文 ngram 分词）；留空关键字则分页浏览全部。结果每页 50 条，支持翻页。
-5. **详情面板**：按类型结构化展示——表展示字段、物理索引、ODB 索引、序列；服务展示每个服务操作的输入/输出字段；交易展示输入/输出与流程编排（flow 步骤及调用目标）；批量交易展示输入字段、批量步骤与步骤组；字典/错误码展示数据项与枚举值明细。已解析引用渲染为可点击链接跳转到目标详情，未解析引用灰色显示原始目标。
+2. **类型查询页**：表、服务文件（SERVICE_TYPE）、服务（SERVICE_OPERATION，按 `服务文件.服务id` 维度搜索，如 `ApBatchFileService.smtbat`）、交易 flowtran、批量交易（页内可切换 FILE_BATCH_TRANSACTION / BATCH_STEP / BATCH_GROUP）、复合类型、字典数据项（ELEMENT，粒度为 `BpDict.E.entp_scale` 这类数据项 fullId）、数据字典、枚举类型、错误码。
+3. **枚举类型页为主从布局**：列表展示枚举的 FullId 与枚举值数量，点击后右侧展示枚举详情与全部枚举值。
+4. **错误码页**：查询对象为 `.error.xml` 的 `errorConf` 根（kind ERRORCONF），详情按 `errors` 分组展示 error 明细（错误码 ID、类型、message），并支持按 message 模糊搜索。
+5. **基础类型**：内置 APS SimpleType 清单（29 种）及其 MySQL / Oracle / PostgreSQL 列型映射，支持按名称/语义过滤，不依赖索引。
+6. **搜索**：查询框 + 维度下拉，支持按 `id` / `fullId` / `longname` / `desc` 单维度或全部维度模糊搜索；搜索为子串匹配（SQL LIKE），部分英文标识符（如 `smtbat`、`openAcc`）与短中文子串均可命中，`%`/`_` 按字面处理；留空关键字则分页浏览全部。结果每页 50 条，支持翻页；结果列表只展示 `fullId/id：中文名`，其余信息在详情面板查看。
+7. **详情面板**：按类型结构化展示——表展示字段、物理索引、ODB 索引、序列；服务文件展示每个服务操作的输入/输出字段；服务展示其输入/输出；交易展示输入/输出与流程编排（mermaid 流程图渲染 `case/when` 分支与 `method` 直调步骤，分支边标注 when 条件，CDN 加载失败时自动降级为缩进列表）；批量交易展示输入字段、批量步骤与步骤组；数据字典展示数据项；错误码按分组展示明细。已解析引用渲染为可点击链接跳转到目标详情，未解析引用灰色显示原始目标。详情属性过滤 `xsi:` 等命名空间属性，避免撑宽页面。
 
 ---
 

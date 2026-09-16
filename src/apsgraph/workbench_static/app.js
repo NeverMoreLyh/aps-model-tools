@@ -818,16 +818,7 @@ async function init() {
   $("#btn-next").addEventListener("click", () => { state.page += 1; runSearch(); });
   $("#kind-select").addEventListener("change", () => { state.page = 1; runSearch(); });
   $("#dimension").addEventListener("change", () => { state.page = 1; runSearch(); });
-  switchPage("top");
-  try {
-    const payload = await api("/api/stats");
-    const stats = payload.stats || {};
-    const top = (payload.top_groups || []).map((g) => `${g.kind}(${g.count})`).join("、");
-    $("#sidebar-stats").innerHTML =
-      `节点 ${stats.nodes} · 边 ${stats.edges} · 文件 ${stats.files}` +
-      (stats.parse_failed ? ` · 解析失败 ${stats.parse_failed}` : "") +
-      `<br><br>顶层模型：${esc(top || "（无）")}`;
-  } catch (error) { /* 统计失败不阻塞工作台 */ }
+  switchPage("dashboard");
 }
 
 init();

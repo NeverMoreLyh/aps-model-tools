@@ -28,7 +28,7 @@ const NAV_OTHER = ["top", "service_file", "batch", "file_batch", "nsql", "shardi
                    "complex_type", "dictionary", "error_code", "error_item", "constant"];
 let navOtherOpen = false;
 /* 折叠窄条上的单字徽标（未指定的取中文名首字） */
-const NAV_SHORT = { dashboard: "总", transaction: "T", service: "S", table: "T",
+const NAV_SHORT = { dashboard: "总", transaction: "F", service: "S", table: "T",
                     dict_element: "D", enum: "E", base_type: "U" };
 
 const BATCH_KINDS = ["BATCH_TRANSACTION", "FILE_BATCH_TRANSACTION", "BATCH_STEP", "BATCH_GROUP"];

@@ -1,6 +1,6 @@
 # APSGraph 运维说明文档
 
-> 版本：0.36.2
+> 版本：0.37.0
 > 更新时间：2026-09-17
 > 文档定位：说明安装发布、索引巡检、故障处理、备份回滚和 CI 使用。
 
@@ -16,6 +16,15 @@
 
 ## 2. 安装与升级
 
+### 2.1 install.sh 一键安装
+
+```bash
+./install.sh          # 构建并安装（自动适配 PEP 668 等环境限制）
+PYTHON=python3.10 ./install.sh   # 指定解释器
+```
+
+### 2.2 pip 安装/升级
+
 ```bash
 python3 -m pip install -e .
 python3 -m pip wheel . --no-deps -w dist
@@ -23,6 +32,22 @@ python3 -m pip install --force-reinstall dist/apsgraph-<VERSION>-py3-none-any.wh
 apsgraph --version
 apsgraph options
 ```
+
+### 2.3 从 Git 仓库安装
+
+```bash
+python3 -m pip install git+https://github.com/NeverMoreLyh/aps-model-tools.git
+```
+
+### 2.4 发布到 PyPI（可选）
+
+```bash
+python3 -m pip install build twine
+python3 -m build            # 生成 dist/ 下的 sdist 与 wheel
+python3 -m twine upload dist/*   # 需要 PyPI 账号与 API Token；发布后用户可直接 pip install apsgraph
+```
+
+发布到 PyPI 后，终端用户安装命令简化为 `python3 -m pip install apsgraph`（Excel 导出装 `apsgraph[excel]`）。
 
 ## 3. 目录与产物
 

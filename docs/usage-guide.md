@@ -1,6 +1,6 @@
 # APSGraph 使用说明
 
-> 版本：0.36.2
+> 版本：0.37.0
 > 更新时间：2026-09-17
 > 项目地址：https://github.com/NeverMoreLyh/aps-model-tools
 
@@ -32,14 +32,37 @@ APSGraph 是一套面向 APS 元数据模型的分析工具集，提供从源码
 
 ## 3. 安装
 
+### 3.1 install.sh 一键安装（推荐）
+
+仓库根目录提供 `install.sh`，自动构建 wheel 并以 pip 安装（自动适配 PEP 668 等环境限制）：
+
 ```bash
-# 方式一：pip 安装（推荐）
+./install.sh
+```
+
+### 3.2 pip 安装
+
+```bash
+# 从构建好的 wheel 安装
+python3 -m pip wheel . --no-deps -w dist
+python3 -m pip install --force-reinstall dist/apsgraph-<VERSION>-py3-none-any.whl
+
+# 开发模式
 pip install -e .
 
 # 如需 Excel 导出
 pip install -e ".[excel]"
+```
 
-# 方式二：直接运行（无需安装）
+### 3.3 从 Git 仓库安装
+
+```bash
+pip install git+https://github.com/NeverMoreLyh/aps-model-tools.git
+```
+
+### 3.4 直接运行（无需安装）
+
+```bash
 export PYTHONPATH=src
 python3 -m apsgraph --help
 ```

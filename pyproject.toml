@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "apsgraph"
-version = "0.36.2"
+version = "0.37.0"
 description = "Read-only APS metadata graph and CodeGraph bridge tools"
 requires-python = ">=3.9"
 dependencies = []

@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import parse_qs, urlparse
 
+from .ddlgen import DdlGenConfig, generate_all_ddl
 from .store import (
     NODE_SELECT, _row_to_dict, connect, find_nodes, get_stats, references,
 )
@@ -549,6 +550,26 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
         finally:
             conn.close()
 
+    def _api_ddl(self, params: Dict[str, List[str]]) -> Dict[str, Any]:
+        """Preview DDL for one table; generation only, never executed."""
+        node_ref = params.get("id", [""])[0]
+        dialect = params.get("dialect", ["mysql"])[0]
+        if not node_ref:
+            raise ValueError("missing node id")
+        if dialect not in {"mysql", "oracle", "postgresql"}:
+            raise ValueError(f"unsupported dialect: {dialect}")
+        conn = connect(self.db_path, read_only=True)
+        try:
+            row = conn.execute("select kind from nodes where stable_id=?",
+                               (_resolve_node_row(conn, node_ref)["stable_id"],)).fetchone()
+            if row is None or row[0] != "TABLE":
+                raise ValueError(f"DDL preview is only available for TABLE nodes: {node_ref}")
+            report = generate_all_ddl(conn, DdlGenConfig(dialect=dialect), [node_ref])
+            return {"dialect": dialect, "sql": report.sql,
+                    "warnings": report.warnings, "errors": report.errors}
+        finally:
+            conn.close()
+
     def _handle_api(self, path: str, params: Dict[str, List[str]]) -> None:
         if path == "/api/stats":
             conn = connect(self.db_path, read_only=True)
@@ -574,6 +595,8 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
             self._send_json(self._api_node(params))
         elif path == "/api/children":
             self._send_json(self._api_children(params))
+        elif path == "/api/ddl":
+            self._send_json(self._api_ddl(params))
         elif path == "/api/basetypes":
             self._send_json({"group": "basetype", "results": BASIC_TYPES})
         elif path == "/api/top-groups":

@@ -22,13 +22,22 @@ body { font: 14px/1.5 -apple-system, "PingFang SC", "Microsoft YaHei", sans-seri
 .sidebar-stats { padding: 12px 16px; font-size: 12px; color: #9aa3b2; border-top: 1px solid #343b4a; margin-top: 10px; }
 
 #main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
-#search-bar { display: flex; gap: 8px; padding: 10px 14px; background: var(--panel); border-bottom: 1px solid var(--border); align-items: center; }
+#search-bar { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px; background: var(--panel); border-bottom: 1px solid var(--border); align-items: center; }
 #search-bar select, #search-bar input, #search-bar button {
-  font: inherit; padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; background: #fff;
+  font: inherit; padding: 5px 8px; border: 1px solid var(--border); border-radius: 6px; background: #fff;
 }
-#search-bar input { flex: 1; }
-#search-bar button { cursor: pointer; background: var(--accent); color: #fff; border-color: var(--accent); }
+#search-bar input { flex: 1 1 130px; min-width: 110px; }
+#search-bar button { cursor: pointer; background: var(--accent); color: #fff; border-color: var(--accent); white-space: nowrap; }
 #search-bar button.secondary { background: #fff; color: var(--text); border-color: var(--border); }
+.action-btn { font: inherit; font-size: 12px; padding: 3px 12px; border: 1px solid var(--accent); border-radius: 6px; background: var(--accent); color: #fff; cursor: pointer; margin-bottom: 10px; }
+.modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 1100; display: flex; align-items: center; justify-content: center; }
+.modal { background: var(--panel); border-radius: 8px; width: min(760px, 92vw); max-height: 86vh; display: flex; flex-direction: column; padding: 14px; box-shadow: 0 10px 40px rgba(0,0,0,.35); }
+.modal-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 10px; }
+.modal-head button { font: inherit; border: 1px solid var(--border); background: #fff; border-radius: 4px; cursor: pointer; padding: 2px 8px; }
+.modal-body { display: flex; flex-direction: column; gap: 10px; overflow: hidden; }
+.modal-body select { font: inherit; padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px; }
+.ddl-output { margin: 0; background: #0d1117; color: #e6edf3; padding: 10px; border-radius: 6px; overflow: auto; max-height: 48vh; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; word-break: break-all; }
+.ddl-empty { color: var(--muted); padding: 10px; border: 1px dashed var(--border); border-radius: 6px; }
 .hidden { display: none !important; }
 
 #content { flex: 1; display: flex; min-height: 0; }
@@ -81,9 +90,13 @@ table.detail-table { width: 100%; border-collapse: collapse; font-size: 12.5px; 
 .mermaid-toolbar { display: flex; gap: 6px; align-items: center; margin-bottom: 6px; }
 .mermaid-toolbar button { font: inherit; font-size: 12px; padding: 2px 10px; border: 1px solid var(--border); border-radius: 4px; background: #fff; cursor: pointer; }
 .mermaid-toolbar button:hover { background: var(--accent-soft); }
+.mermaid-stage { position: relative; }
+.mermaid-stage.fullscreen { position: fixed; inset: 14px; z-index: 1000; background: #fff; box-shadow: 0 6px 28px rgba(0,0,0,.35); display: flex; flex-direction: column; padding: 10px; }
+.mermaid-stage.fullscreen .mermaid-wrap { flex: 1; height: auto; }
+.mermaid-close { position: absolute; top: 6px; right: 8px; z-index: 20; font: inherit; font-size: 12px; padding: 3px 10px; border: 1px solid var(--border); border-radius: 4px; background: #fff; cursor: pointer; }
+.mermaid-close:hover { background: #ffebe9; }
 .mermaid-wrap { position: relative; overflow: hidden; border: 1px solid var(--border); border-radius: 6px; height: 340px; background: #fff; cursor: grab; }
 .mermaid-wrap.panning { cursor: grabbing; }
-.mermaid-wrap.fullscreen { position: fixed; inset: 14px; z-index: 1000; height: auto; box-shadow: 0 6px 28px rgba(0,0,0,.35); }
 .mermaid-inner { transform-origin: 0 0; width: 100%; }
 .mermaid-inner svg { display: block; width: 100% !important; max-width: none !important; height: auto; }
 .error-banner { background: #ffebe9; border: 1px solid #ff818266; color: #cf222e; padding: 8px 12px; border-radius: 6px; margin: 10px 14px; }

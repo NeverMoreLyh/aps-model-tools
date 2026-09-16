@@ -355,6 +355,8 @@ function flowTreeList(steps) {
   return `<div class="tree">` + render(steps) + `</div>`;
 }
 
+const MERMAID_DEFAULT_SCALE = 0.6; // 初始与重置时的默认缩放，避免大图初始铺满
+
 async function renderFlow(steps, holder) {
   const fallback = flowTreeList(steps);
   if (typeof window.mermaid === "undefined") { holder.innerHTML = fallback; return; }
@@ -362,14 +364,17 @@ async function renderFlow(steps, holder) {
     window.mermaid.initialize({ startOnLoad: false, securityLevel: "strict" });
     const { svg } = await window.mermaid.render(`flow-${Date.now()}`, buildMermaidCode(steps));
     holder.innerHTML = `
-      <div class="mermaid-toolbar">
-        <button data-act="zoom-in">放大 +</button>
-        <button data-act="zoom-out">缩小 −</button>
-        <button data-act="reset">重置</button>
-        <button data-act="fullscreen">全屏</button>
-        <span class="muted">滚轮缩放 · 拖拽平移</span>
+      <div class="mermaid-stage">
+        <div class="mermaid-toolbar">
+          <button data-act="zoom-in">放大 +</button>
+          <button data-act="zoom-out">缩小 −</button>
+          <button data-act="reset">重置</button>
+          <button data-act="fullscreen">全屏</button>
+          <span class="muted">滚轮缩放 · 拖拽平移</span>
+        </div>
+        <div class="mermaid-wrap"><div class="mermaid-inner">${svg}</div></div>
+        <button class="mermaid-close hidden" title="退出全屏">✕ 关闭全屏</button>
       </div>
-      <div class="mermaid-wrap"><div class="mermaid-inner">${svg}</div></div>
       <details><summary>列表视图</summary>${fallback}</details>`;
     setupPanZoom(holder);
     holder.querySelectorAll("a.node-link").forEach((link) =>
@@ -380,28 +385,35 @@ async function renderFlow(steps, holder) {
 }
 
 function setupPanZoom(holder) {
+  const stage = holder.querySelector(".mermaid-stage");
   const wrap = holder.querySelector(".mermaid-wrap");
   const inner = holder.querySelector(".mermaid-inner");
-  if (!wrap || !inner) return;
-  const view = { scale: 1, tx: 0, ty: 0 };
+  if (!stage || !wrap || !inner) return;
+  const view = { scale: MERMAID_DEFAULT_SCALE, tx: 0, ty: 0 };
   const apply = () => {
     inner.style.transform = `translate(${view.tx}px, ${view.ty}px) scale(${view.scale})`;
   };
+  apply();
   const clampScale = (value) => Math.min(6, Math.max(0.2, value));
-  holder.querySelectorAll(".mermaid-toolbar button").forEach((btn) => {
+  const closeBtn = stage.querySelector(".mermaid-close");
+  const fullscreenBtn = stage.querySelector('[data-act="fullscreen"]');
+  const setFullscreen = (on) => {
+    stage.classList.toggle("fullscreen", on);
+    if (fullscreenBtn) fullscreenBtn.textContent = on ? "退出全屏" : "全屏";
+    closeBtn.classList.toggle("hidden", !on);
+    document.body.style.overflow = on ? "hidden" : "";
+    view.scale = MERMAID_DEFAULT_SCALE; view.tx = 0; view.ty = 0; apply();
+  };
+  stage.querySelectorAll(".mermaid-toolbar button").forEach((btn) => {
     btn.addEventListener("click", () => {
       const act = btn.dataset.act;
       if (act === "zoom-in") { view.scale = clampScale(view.scale * 1.25); apply(); }
       else if (act === "zoom-out") { view.scale = clampScale(view.scale / 1.25); apply(); }
-      else if (act === "reset") { view.scale = 1; view.tx = 0; view.ty = 0; apply(); }
-      else if (act === "fullscreen") {
-        const on = wrap.classList.toggle("fullscreen");
-        btn.textContent = on ? "退出全屏" : "全屏";
-        document.body.style.overflow = on ? "hidden" : "";
-        view.scale = 1; view.tx = 0; view.ty = 0; apply();
-      }
+      else if (act === "reset") { view.scale = MERMAID_DEFAULT_SCALE; view.tx = 0; view.ty = 0; apply(); }
+      else if (act === "fullscreen") setFullscreen(!stage.classList.contains("fullscreen"));
     });
   });
+  closeBtn.addEventListener("click", () => setFullscreen(false));
   wrap.addEventListener("wheel", (event) => {
     event.preventDefault();
     view.scale = clampScale(view.scale * (event.deltaY < 0 ? 1.1 : 0.9));
@@ -433,6 +445,7 @@ function renderDetailSections(data) {
   const detail = data.detail || {};
   let html = "";
   if (node.kind === "TABLE") {
+    html += `<button id="btn-gen-ddl" class="action-btn">生成 DDL</button>`;
     html += section("字段（fields）", fieldsTable(detail.fields, TABLE_COLS));
     html += section("物理索引（indexes）", detail.indexes && detail.indexes.length
       ? fieldsTable(detail.indexes, ["id", "type", "fields"]) : `<div class="muted">（无）</div>`);
@@ -472,6 +485,83 @@ function renderDetailSections(data) {
       html += section("枚举值", fieldsTable(detail.enum_values, ENUM_COLS));
   }
   return html;
+}
+
+/* ---------- DDL 预览弹窗（只生成，不执行） ---------- */
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch (error) {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand("copy"); } finally { ta.remove(); }
+    return true;
+  }
+}
+
+function showDdlDialog(node) {
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  overlay.innerHTML = `
+    <div class="modal">
+      <div class="modal-head">
+        <strong>生成 DDL：${esc(node.full_id || node.raw_id)}</strong>
+        <button class="modal-close" title="关闭">✕</button>
+      </div>
+      <div class="modal-body">
+        <div>
+          <label>数据库类型
+            <select id="ddl-dialect">
+              <option value="mysql">MySQL</option>
+              <option value="oracle">Oracle</option>
+              <option value="postgresql">PostgreSQL</option>
+            </select>
+          </label>
+          <button id="ddl-generate" class="action-btn" style="margin-left:10px; margin-bottom:0;">生成</button>
+        </div>
+        <pre id="ddl-output" class="ddl-empty">选择数据库类型后点击“生成”。</pre>
+        <button id="ddl-copy" class="action-btn hidden" style="align-self:flex-start;">复制 DDL</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  overlay.querySelector(".modal-close").addEventListener("click", close);
+  overlay.addEventListener("click", (event) => { if (event.target === overlay) close(); });
+  const output = overlay.querySelector("#ddl-output");
+  const copyBtn = overlay.querySelector("#ddl-copy");
+  overlay.querySelector("#ddl-generate").addEventListener("click", async () => {
+    const dialect = overlay.querySelector("#ddl-dialect").value;
+    output.className = "ddl-empty";
+    output.textContent = "生成中…";
+    copyBtn.classList.add("hidden");
+    try {
+      const payload = await api("/api/ddl", { id: node.stable_id, dialect });
+      const lines = [];
+      if (payload.errors && payload.errors.length) lines.push(`-- 错误:\n-- ${payload.errors.join("\n-- ")}`);
+      if (payload.warnings && payload.warnings.length) lines.push(`-- 警告:\n-- ${payload.warnings.join("\n-- ")}`);
+      if (payload.sql) lines.push(payload.sql);
+      if (lines.length) {
+        output.className = "ddl-output";
+        output.textContent = lines.join("\n\n");
+        copyBtn.classList.remove("hidden");
+      } else {
+        output.textContent = "未生成任何 DDL。";
+      }
+    } catch (error) {
+      output.className = "ddl-empty";
+      output.textContent = `生成失败：${error.message}`;
+    }
+  });
+  copyBtn.addEventListener("click", async () => {
+    await copyText(output.textContent);
+    copyBtn.textContent = "已复制 ✓";
+    setTimeout(() => { copyBtn.textContent = "复制 DDL"; }, 1500);
+  });
 }
 
 function treeHtml(children) {
@@ -515,6 +605,7 @@ function goBackDetail() {
 
 async function showDetail(nodeRef, isBack = false) {
   const pane = $("#detail-pane");
+  document.body.style.overflow = ""; // 重建面板前退出可能残留的全屏滚动锁
   pane.innerHTML = `<div class="empty-tip">加载中…</div>`;
   if (!isBack) {
     if (detailHistory.current && detailHistory.current !== nodeRef) {
@@ -542,6 +633,8 @@ async function showDetail(nodeRef, isBack = false) {
     pane.scrollTop = 0;
     const backBtn = pane.querySelector("#btn-back");
     if (backBtn) backBtn.addEventListener("click", goBackDetail);
+    const ddlBtn = pane.querySelector("#btn-gen-ddl");
+    if (ddlBtn) ddlBtn.addEventListener("click", () => showDdlDialog(node));
     pane.querySelectorAll("a.node-link").forEach((link) =>
       link.addEventListener("click", () => showDetail(link.dataset.id)));
     const tree = pane.querySelector(".tree");

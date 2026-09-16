@@ -369,6 +369,20 @@ class WorkbenchHttpTest(WorkbenchTestBase):
         children = json.loads(body)["children"]
         self.assertEqual(["DemoTables.demo_user"], [item["full_id"] for item in children])
 
+        # DDL 预览：只生成不执行，支持三种方言
+        status, body = self._get("/api/search?group=table&q=demo_user&field=id")
+        stable_id = json.loads(body)["results"][0]["stable_id"]
+        for dialect in ("mysql", "oracle", "postgresql"):
+            status, body = self._get(f"/api/ddl?id={urllib.request.quote(stable_id)}&dialect={dialect}")
+            self.assertEqual(200, status)
+            payload = json.loads(body)
+            self.assertEqual(dialect, payload["dialect"])
+            self.assertIn("create", payload["sql"].lower())
+        status, body = self._get("/api/ddl?id=demo_user&dialect=db2")
+        self.assertEqual(400, status)
+        status, body = self._get(f"/api/ddl?id={urllib.request.quote('DemoSvc.openAccount')}&dialect=mysql")
+        self.assertEqual(400, status)  # 仅表节点支持 DDL 预览
+
         status, _ = self._get("/api/unknown")
         self.assertEqual(404, status)
         status, _ = self._get("/api/node")

@@ -17,22 +17,22 @@
     <div id="sidebar-stats" class="sidebar-stats"></div>
   </nav>
   <main id="main">
-    <section id="search-bar">
-      <select id="dimension">
-        <option value="">全部维度</option>
-        <option value="id">id</option>
-        <option value="fullid">fullId</option>
-        <option value="longname">longname</option>
-        <option value="desc">desc</option>
-      </select>
-      <select id="kind-select" class="hidden"></select>
-      <input id="query" type="search" placeholder="输入关键字模糊搜索，留空浏览全部…">
-      <button id="btn-search">查询</button>
-      <button id="btn-clear" class="secondary">清空</button>
-    </section>
     <section id="content">
       <button id="nav-open" class="hidden" title="展开菜单">☰ 菜单</button>
       <div id="results-pane">
+        <div id="search-bar">
+          <select id="dimension">
+            <option value="">全部维度</option>
+            <option value="id">id</option>
+            <option value="fullid">fullId</option>
+            <option value="longname">longname</option>
+            <option value="desc">desc</option>
+          </select>
+          <select id="kind-select" class="hidden"></select>
+          <input id="query" type="search" placeholder="模糊搜索，留空浏览全部…">
+          <button id="btn-search">查询</button>
+          <button id="btn-clear" class="secondary">清空</button>
+        </div>
         <div id="results-meta" class="results-meta"></div>
         <div id="results-body"></div>
         <div id="pagination" class="pagination">

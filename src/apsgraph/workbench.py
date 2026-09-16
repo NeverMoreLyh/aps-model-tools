@@ -292,15 +292,18 @@ def _named_sql_texts(conn: sqlite3.Connection, node: Dict[str, Any],
                         for child in sql_children]
             dyn_children = [child for child in element if _local_tag(child.tag) == "dynamicSql"]
             if dyn_children:
-                # 动态SQL：每个 <dynamicSql type="..."> 一个方言，其内 <str> 片段按序拼接
+                # 动态SQL：按 MyBatis mapper 机制，原样展示每个 <dynamicSql type="..."> XML 节点
                 result = []
                 for dyn in dyn_children:
-                    parts = [(s.text or "").strip() for s in dyn if _local_tag(s.tag) == "str"]
+                    raw = ET.tostring(dyn, encoding="unicode").strip()
                     result.append({"type": str(dyn.attrib.get("type") or "NONE"),
-                                   "text": "\n".join(part for part in parts if part)})
+                                   "text": raw})
                 return result
             own_text = (element.text or "").strip()
-            return [{"type": "NONE", "text": own_text}] if own_text else []
+            if own_text:
+                return [{"type": "NONE", "text": own_text}]
+            # 无 CDATA 文本时兜底展示整个语句节点的原始 XML
+            return [{"type": "NONE", "text": ET.tostring(element, encoding="unicode").strip()}]
     return []
 
 

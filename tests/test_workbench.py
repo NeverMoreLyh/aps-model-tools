@@ -293,6 +293,9 @@ class WorkbenchQueryTest(WorkbenchTestBase):
         dyn_sqls = node_detail(self.conn, dyn["results"][0]["stable_id"],
                                source_root=self.root)["detail"]["sqls"]
         self.assertEqual(["mysql", "NONE"], [s["type"] for s in dyn_sqls])
+        # 动态SQL原样展示原始 XML 节点（含 str/test 等子节点）
+        self.assertIn("<dynamicSql type=\"mysql\">", dyn_sqls[0]["text"])
+        self.assertIn('test="org_num!=null"', dyn_sqls[0]["text"])
         self.assertIn("kstb_demo_mysql", dyn_sqls[0]["text"])
         self.assertIn("select * from kstb_demo where", dyn_sqls[1]["text"])
         self.assertEqual([], node_detail(self.conn, nsql_detail["statements"][0]["stable_id"])["detail"]["sqls"])

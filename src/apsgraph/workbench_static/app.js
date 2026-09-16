@@ -6,15 +6,15 @@ const PAGES = [
   { id: "table", label: "表", group: "table" },
   { id: "service_file", label: "服务文件", group: "service" },
   { id: "service", label: "服务", group: "service_operation" },
-  { id: "transaction", label: "交易 flowtran", group: "transaction" },
+  { id: "transaction", label: "交易", group: "transaction" },
   { id: "batch", label: "批量交易", group: "batch", kindSelect: true },
   { id: "complex_type", label: "复合类型", group: "complex_type" },
-  { id: "dict_element", label: "字典数据项", group: "dict_element" },
-  { id: "dictionary", label: "数据字典", group: "dictionary" },
+  { id: "dict_element", label: "数据字典", group: "dict_element" },
+  { id: "dictionary", label: "数据字典文件", group: "dictionary" },
   { id: "enum", label: "枚举类型", group: "enum", enumMaster: true },
   { id: "base_type", label: "基础类型", group: "base_type" },
-  { id: "error_code", label: "错误码", group: "error_code" },
-  { id: "error_item", label: "错误码数据项", group: "error_item" },
+  { id: "error_code", label: "错误码文件", group: "error_code" },
+  { id: "error_item", label: "错误码", group: "error_item" },
   { id: "constant", label: "常量", group: "constant" },
 ];
 
@@ -96,7 +96,6 @@ function switchPage(pageId) {
   $("#detail-pane").innerHTML = "";
   detailHistory.stack = [];
   detailHistory.current = null;
-  if (NAV_OTHER.includes(pageId)) navOtherOpen = true;
   renderNav();
   runSearch();
 }

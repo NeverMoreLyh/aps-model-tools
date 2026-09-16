@@ -780,12 +780,7 @@ async function showDetail(nodeRef, isBack = false) {
 function initLayoutControls() {
   const layout = $("#layout");
   $("#nav-toggle").addEventListener("click", () => {
-    layout.classList.add("nav-collapsed");
-    $("#nav-open").classList.remove("hidden");
-  });
-  $("#nav-open").addEventListener("click", () => {
-    layout.classList.remove("nav-collapsed");
-    $("#nav-open").classList.add("hidden");
+    layout.classList.toggle("nav-collapsed");
   });
   const resizer = $("#pane-resizer");
   const results = $("#results-pane");

@@ -321,6 +321,9 @@ class WorkbenchHttpTest(WorkbenchTestBase):
         self.assertIn("runSearch".encode(), body)
         status, body = self._get("/app.css")
         self.assertEqual(200, status)
+        status, body = self._get("/mermaid.min.js")
+        self.assertEqual(200, status)
+        self.assertIn(b"mermaid", body)
 
     def test_static_path_traversal_blocked(self):
         status, _ = self._get("/..%2fcli.py")

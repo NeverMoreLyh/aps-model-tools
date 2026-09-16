@@ -1,4 +1,4 @@
-/* APSGraph 元数据查询工作台前端（vanilla JS，无第三方依赖；mermaid 走 CDN，离线自动降级为列表） */
+/* APSGraph 元数据查询工作台前端（vanilla JS，无第三方依赖；mermaid 随包内置，加载失败自动降级为列表） */
 "use strict";
 
 const PAGES = [

@@ -591,7 +591,7 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
         try:
             if parsed.path == "/":
                 self._send_static("index.html")
-            elif parsed.path in {"/app.js", "/app.css"}:
+            elif parsed.path in {"/app.js", "/app.css", "/mermaid.min.js"}:
                 self._send_static(parsed.path.lstrip("/"))
             elif parsed.path.startswith("/api/"):
                 self._handle_api(parsed.path, parse_qs(parsed.query))

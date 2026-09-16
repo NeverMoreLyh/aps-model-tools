@@ -1,6 +1,6 @@
 # APSGraph 使用说明
 
-> 版本：0.35.0
+> 版本：0.36.0
 > 更新时间：2026-09-17
 > 项目地址：https://github.com/NeverMoreLyh/aps-model-tools
 

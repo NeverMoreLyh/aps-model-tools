@@ -9,7 +9,10 @@
 <body>
 <div id="layout">
   <nav id="sidebar">
-    <div class="brand">APSGraph<br><span class="brand-sub">元数据查询工作台</span></div>
+    <div class="brand">
+      <button id="nav-toggle" title="收起菜单">☰</button>
+      <span>APSGraph<br><span class="brand-sub">元数据查询工作台</span></span>
+    </div>
     <ul id="nav-list"></ul>
     <div id="sidebar-stats" class="sidebar-stats"></div>
   </nav>
@@ -28,6 +31,7 @@
       <button id="btn-clear" class="secondary">清空</button>
     </section>
     <section id="content">
+      <button id="nav-open" class="hidden" title="展开菜单">☰ 菜单</button>
       <div id="results-pane">
         <div id="results-meta" class="results-meta"></div>
         <div id="results-body"></div>
@@ -37,6 +41,7 @@
           <button id="btn-next" class="secondary">下一页</button>
         </div>
       </div>
+      <div id="pane-resizer" title="拖拽调整宽度"></div>
       <aside id="detail-pane"></aside>
     </section>
   </main>

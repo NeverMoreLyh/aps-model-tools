@@ -302,12 +302,71 @@ async function renderFlow(steps, holder) {
   try {
     window.mermaid.initialize({ startOnLoad: false, securityLevel: "strict" });
     const { svg } = await window.mermaid.render(`flow-${Date.now()}`, buildMermaidCode(steps));
-    holder.innerHTML = svg + `<details><summary>列表视图</summary>${fallback}</details>`;
+    holder.innerHTML = `
+      <div class="mermaid-toolbar">
+        <button data-act="zoom-in">放大 +</button>
+        <button data-act="zoom-out">缩小 −</button>
+        <button data-act="reset">重置</button>
+        <button data-act="fullscreen">全屏</button>
+        <span class="muted">滚轮缩放 · 拖拽平移</span>
+      </div>
+      <div class="mermaid-wrap"><div class="mermaid-inner">${svg}</div></div>
+      <details><summary>列表视图</summary>${fallback}</details>`;
+    setupPanZoom(holder);
     holder.querySelectorAll("a.node-link").forEach((link) =>
       link.addEventListener("click", () => showDetail(link.dataset.id)));
   } catch (error) {
     holder.innerHTML = fallback;
   }
+}
+
+function setupPanZoom(holder) {
+  const wrap = holder.querySelector(".mermaid-wrap");
+  const inner = holder.querySelector(".mermaid-inner");
+  if (!wrap || !inner) return;
+  const view = { scale: 1, tx: 0, ty: 0 };
+  const apply = () => {
+    inner.style.transform = `translate(${view.tx}px, ${view.ty}px) scale(${view.scale})`;
+  };
+  const clampScale = (value) => Math.min(6, Math.max(0.2, value));
+  holder.querySelectorAll(".mermaid-toolbar button").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const act = btn.dataset.act;
+      if (act === "zoom-in") { view.scale = clampScale(view.scale * 1.25); apply(); }
+      else if (act === "zoom-out") { view.scale = clampScale(view.scale / 1.25); apply(); }
+      else if (act === "reset") { view.scale = 1; view.tx = 0; view.ty = 0; apply(); }
+      else if (act === "fullscreen") {
+        const on = wrap.classList.toggle("fullscreen");
+        btn.textContent = on ? "退出全屏" : "全屏";
+        document.body.style.overflow = on ? "hidden" : "";
+        view.scale = 1; view.tx = 0; view.ty = 0; apply();
+      }
+    });
+  });
+  wrap.addEventListener("wheel", (event) => {
+    event.preventDefault();
+    view.scale = clampScale(view.scale * (event.deltaY < 0 ? 1.1 : 0.9));
+    apply();
+  }, { passive: false });
+  wrap.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    wrap.setPointerCapture(event.pointerId);
+    wrap.classList.add("panning");
+    const start = { x: event.clientX, y: event.clientY, tx: view.tx, ty: view.ty };
+    const onMove = (moveEvent) => {
+      view.tx = start.tx + (moveEvent.clientX - start.x);
+      view.ty = start.ty + (moveEvent.clientY - start.y);
+      apply();
+    };
+    const onUp = () => {
+      wrap.classList.remove("panning");
+      wrap.removeEventListener("pointermove", onMove);
+      wrap.removeEventListener("pointerup", onUp);
+    };
+    wrap.addEventListener("pointermove", onMove);
+    wrap.addEventListener("pointerup", onUp);
+  });
 }
 
 function renderDetailSections(data) {
@@ -417,8 +476,41 @@ async function showDetail(nodeRef) {
 }
 
 /* ---------- 初始化 ---------- */
+function initLayoutControls() {
+  const layout = $("#layout");
+  $("#nav-toggle").addEventListener("click", () => {
+    layout.classList.add("nav-collapsed");
+    $("#nav-open").classList.remove("hidden");
+  });
+  $("#nav-open").addEventListener("click", () => {
+    layout.classList.remove("nav-collapsed");
+    $("#nav-open").classList.add("hidden");
+  });
+  const resizer = $("#pane-resizer");
+  const results = $("#results-pane");
+  resizer.addEventListener("mousedown", (event) => {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = results.getBoundingClientRect().width;
+    const onMove = (moveEvent) => {
+      const width = Math.min(window.innerWidth * 0.7,
+                             Math.max(220, startWidth + moveEvent.clientX - startX));
+      results.style.width = `${width}px`;
+    };
+    const onUp = () => {
+      document.body.classList.remove("resizing");
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    document.body.classList.add("resizing");
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  });
+}
+
 async function init() {
   renderNav();
+  initLayoutControls();
   $("#btn-search").addEventListener("click", () => { state.page = 1; runSearch(); });
   $("#btn-clear").addEventListener("click", () => { $("#query").value = ""; state.page = 1; runSearch(); });
   $("#query").addEventListener("keydown", (event) => { if (event.key === "Enter") { state.page = 1; runSearch(); } });

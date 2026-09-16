@@ -170,7 +170,9 @@ def _child_full_id(parent_full: str, tag: str, raw_id: str, root_id: str) -> str
         return f"{root_id}.{raw_id}" if root_id else raw_id
     if parent_full:
         return f"{parent_full}.{raw_id}"
-    return f"{root_id}.{raw_id}" if root_id else raw_id
+    # 仅根节点会走到这里（parent_full 为空且非顶层标签），此时 raw_id 即 root_id，
+    # full_id 不应重复拼接（errorConf 根是 GnError 而非 GnError.GnError）。
+    return raw_id
 
 
 def _kind(tag: str, attrs: Dict[str, str]) -> str:

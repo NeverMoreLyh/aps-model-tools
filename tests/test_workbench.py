@@ -187,7 +187,7 @@ class WorkbenchQueryTest(WorkbenchTestBase):
         # 真实工程 .error.xml 为 errorConf（kind ERRORCONF）
         errors = search_group(self.conn, "error_code")
         self.assertEqual(1, errors["total"])
-        self.assertEqual("MdError.MdError", errors["results"][0]["full_id"])
+        self.assertEqual("MdError", errors["results"][0]["full_id"])
         self.assertEqual("ERRORCONF", errors["results"][0]["kind"])
         self.assertTrue(errors["results"][0]["file_path"].endswith(".error.xml"))
 
@@ -198,15 +198,15 @@ class WorkbenchQueryTest(WorkbenchTestBase):
         # 错误码数据项页：按 GnError.GnError.E0001 这类 full_id 粒度查询 ERROR 节点
         items = search_group(self.conn, "error_item", query="E0002", dimension="id")
         self.assertEqual(1, items["total"])
-        self.assertEqual("MdError.MdError.Cuce.E0002", items["results"][0]["full_id"])
+        self.assertEqual("MdError.Cuce.E0002", items["results"][0]["full_id"])
         self.assertEqual("ERROR", items["results"][0]["kind"])
         self.assertEqual(1, search_group(self.conn, "error_item", query="不存在", dimension="desc")["total"])
 
         # fullid 维度按 "." 分段层级匹配：省略中间分组段仍可定位
         hierarchical = search_group(self.conn, "error_item",
-                                    query="MdError.MdError.E0002", dimension="fullid")
+                                    query="MdError.E0002", dimension="fullid")
         self.assertEqual(1, hierarchical["total"])
-        self.assertEqual("MdError.MdError.Cuce.E0002", hierarchical["results"][0]["full_id"])
+        self.assertEqual("MdError.Cuce.E0002", hierarchical["results"][0]["full_id"])
 
     def test_browse_mode_and_pagination(self):
         page1 = search_group(self.conn, "table", page=1, page_size=1)
@@ -383,14 +383,14 @@ class WorkbenchHttpTest(WorkbenchTestBase):
         self.assertEqual(1, enums["total"])
         self.assertEqual(2, enums["results"][0]["value_count"])
 
-        status, body = self._get("/api/node?id=" + urllib.request.quote("MdError.MdError"))
+        status, body = self._get("/api/node?id=" + urllib.request.quote("MdError"))
         self.assertEqual(200, status)
         detail = json.loads(body)
         self.assertEqual("ERRORCONF", detail["node"]["kind"])
         self.assertEqual(["E0002", "E0003"],
                          [item["raw_id"] for item in detail["detail"]["groups"][0]["errors"]])
 
-        status, body = self._get("/api/node?id=" + urllib.request.quote("MdError.MdError.Cuce.E0002"))
+        status, body = self._get("/api/node?id=" + urllib.request.quote("MdError.Cuce.E0002"))
         self.assertEqual(200, status)
         error_detail = json.loads(body)
         self.assertEqual("ERROR", error_detail["node"]["kind"])

@@ -38,7 +38,7 @@ KIND_GROUPS: Dict[str, Dict[str, Any]] = {
     # Real-world .error.xml files are errorConf roots (kind ERRORCONF), not
     # dictionaries; their detail carries errors>error message definitions.
     "error_code": {"kinds": {"ERRORCONF"}, "suffix": ".error.xml"},
-    # 错误码数据项：粒度为 GnError.GnError.E0001 这类 error 明细节点
+    # 错误码数据项：粒度为 GnError.Genl.E0001 这类 error 明细节点
     "error_item": {"kinds": {"ERROR"}, "suffix": ".error.xml"},
     "complex_type": {"kinds": {"COMPLEX_TYPE"}},
     # 字典数据项只收字典文件（.d_schema.xml，父节点为 DICTIONARY）下的 element，

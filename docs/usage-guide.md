@@ -1,6 +1,6 @@
 # APSGraph 使用说明
 
-> 版本：0.26.0
+> 版本：0.26.1
 > 更新时间：2026-09-16
 > 项目地址：https://github.com/NeverMoreLyh/aps-model-tools
 
@@ -438,7 +438,7 @@ apsgraph workbench --port 9000 --no-browser
 页面与查询能力：
 
 1. **顶层模型**：按顶层模型类型（SCHEMA / SQL_GROUP / SERVICE_TYPE / TRANSACTION / BATCH_TRANSACTION 等）分组列出所有顶层节点；点击节点在详情面板展示递归包含的子模型树（逐层懒加载展开）。
-2. **类型查询页**：表、服务文件（SERVICE_TYPE）、服务（SERVICE_OPERATION，按 `服务文件.服务id` 维度搜索，如 `ApBatchFileService.smtbat`）、交易 flowtran、批量交易（页内可切换 FILE_BATCH_TRANSACTION / BATCH_STEP / BATCH_GROUP）、复合类型、字典数据项（仅收字典文件 `.d_schema.xml` 中 DICTIONARY 节点下的 element，粒度为 `BpDict.B.btch_grp_num` 这类 `字典文件id.子模块.id`；复合类型的 element 不在此页）、数据字典、枚举类型、错误码、错误码数据项（kind ERROR，粒度为 `GnError.GnError.Genl.E0001` 这类 fullId；fullId 维度支持按 `.` 分段的层级筛选，省略中间分组段仍可定位）。
+2. **类型查询页**：表、服务文件（SERVICE_TYPE）、服务（SERVICE_OPERATION，按 `服务文件.服务id` 维度搜索，如 `ApBatchFileService.smtbat`）、交易 flowtran、批量交易（页内可切换 FILE_BATCH_TRANSACTION / BATCH_STEP / BATCH_GROUP）、复合类型、字典数据项（仅收字典文件 `.d_schema.xml` 中 DICTIONARY 节点下的 element，粒度为 `BpDict.B.btch_grp_num` 这类 `字典文件id.子模块.id`；复合类型的 element 不在此页）、数据字典、枚举类型、错误码、错误码数据项（kind ERROR，粒度为 `GnError.Genl.E0001` 这类 fullId；fullId 维度支持按 `.` 分段的层级筛选，省略中间分组段仍可定位）。
 3. **枚举类型页为主从布局**：列表展示枚举的 FullId 与枚举值数量，点击后右侧展示枚举详情与全部枚举值。
 4. **错误码页**：查询对象为 `.error.xml` 的 `errorConf` 根（kind ERRORCONF），详情按 `errors` 分组展示 error 明细（错误码 ID、类型、message），并支持按 message 模糊搜索。
 5. **基础类型**：内置 APS SimpleType 清单（29 种）及其 MySQL / Oracle / PostgreSQL 列型映射，支持按名称/语义过滤，不依赖索引。

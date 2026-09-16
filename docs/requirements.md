@@ -1,6 +1,6 @@
 # APSGraph 需求文档
 
-> 版本：0.26.0
+> 版本：0.26.1
 > 更新时间：2026-09-16  
 > 文档定位：本文件是 APSGraph 的长期需求基线，汇总产品定位、用户需求、功能需求、非功能需求与演进需求。新增需求必须先更新本文，再进入设计与实现。
 
@@ -94,7 +94,7 @@ APSGraph 不修改业务源码，不执行 DDL，不写入 CodeGraph 数据库�
 ### R19 查询工作台
 
 - `workbench` 在本地浏览器提供元数据查询工作台：只读、仅绑定 `127.0.0.1`、纯标准库实现、不依赖第三方运行时库。
-- 支持按顶层模型查询并展示递归包含的子模型树（懒加载）；支持表、服务文件（SERVICE_TYPE）、服务（SERVICE_OPERATION，按 `服务文件.服务id` 维度搜索）、交易 flowtran、批量交易、复合类型、数据字典、字典数据项（仅字典文件 `.d_schema.xml` 中 DICTIONARY 下的 element，粒度 `BpDict.B.btch_grp_num`，不含复合类型的 element）、错误码数据项（kind ERROR，粒度 `GnError.GnError.Genl.E0001`；fullId 维度支持按 `.` 分段层级筛选）、枚举类型、错误码的独立查询页；基础类型为内置 APS SimpleType 清单页。
+- 支持按顶层模型查询并展示递归包含的子模型树（懒加载）；支持表、服务文件（SERVICE_TYPE）、服务（SERVICE_OPERATION，按 `服务文件.服务id` 维度搜索）、交易 flowtran、批量交易、复合类型、数据字典、字典数据项（仅字典文件 `.d_schema.xml` 中 DICTIONARY 下的 element，粒度 `BpDict.B.btch_grp_num`，不含复合类型的 element）、错误码数据项（kind ERROR，粒度 `GnError.Genl.E0001`；fullId 维度支持按 `.` 分段层级筛选）、枚举类型、错误码的独立查询页；基础类型为内置 APS SimpleType 清单页。
 - 枚举类型页为主从布局：列表展示枚举 FullId 与枚举值数量，详情展示枚举值明细。
 - 错误码页查询对象为 `.error.xml` 的 `errorConf`（kind ERRORCONF），详情按 `errors` 分组展示 error 明细（ID、类型、message），并支持按 message 模糊搜索。
 - 搜索栏（维度下拉、关键字、查询）位于中栏顶部，过滤直接作用于中间结果列表。

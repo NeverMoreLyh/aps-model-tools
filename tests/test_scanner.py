@@ -89,6 +89,27 @@ class ScannerTest(unittest.TestCase):
         dict_incoming = references(conn, dictionary[0]["stable_id"], "in", 1)
         self.assertIn("DICT_REF", {e["relation_kind"] for e in dict_incoming["edges"]})
 
+    def test_non_top_level_root_full_id_is_not_duplicated(self):
+        root = self.root / "err-root"
+        root.mkdir()
+        (root / "MdError.error.xml").write_text(
+            '<errorConf id="MdError" longname="错误码">'
+            '<errors id="Cuce"><error id="E0002" type="error" message="x"/></errors></errorConf>',
+            encoding="utf-8",
+        )
+        db = root / "models.db"
+        scan_workspace(root, db)
+        conn = connect(db)
+        try:
+            conf = find_nodes(conn, "MdError")
+            self.assertEqual(1, len(conf))
+            self.assertEqual("MdError", conf[0]["full_id"])
+            err = find_nodes(conn, "MdError.Cuce.E0002")
+            self.assertEqual(1, len(err))
+            self.assertEqual("ERROR", err[0]["kind"])
+        finally:
+            conn.close()
+
     def test_non_model_attributes_do_not_become_unresolved_references(self):
         root = self.root / "non-model"
         root.mkdir()

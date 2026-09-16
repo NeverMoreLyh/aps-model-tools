@@ -313,11 +313,17 @@ def _fields_under(conn: sqlite3.Connection, node_id: int, container_tag: str) ->
 
 
 def _table_detail(conn: sqlite3.Connection, node_id: int) -> Dict[str, Any]:
+    # Real tables carry both index flavors as kind INDEX; distinguish them by
+    # their parent container (<indexes> vs <odbindexes>), not by tag.
+    odb_container = _container_under(conn, node_id, "odbindexes")
+    odbindexes = _descendants_of_kind(conn, odb_container, "INDEX") if odb_container is not None else []
+    odb_ids = {node["id"] for node in odbindexes}
+    indexes = [node for node in _descendants_of_kind(conn, node_id, "INDEX")
+               if node["id"] not in odb_ids]
     return {
         "fields": _descendants_of_kind(conn, node_id, "FIELD"),
-        "indexes": [node for node in _descendants_of_kind(conn, node_id, "INDEX")
-                    if node.get("xml_tag") == "index"],
-        "odbindexes": _descendants_of_kind(conn, node_id, "ODBINDEX"),
+        "indexes": indexes,
+        "odbindexes": odbindexes,
         "sequences": _descendants_of_kind(conn, node_id, "SEQUENCE"),
     }
 

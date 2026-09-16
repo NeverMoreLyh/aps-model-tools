@@ -422,7 +422,7 @@ function renderDetailSections(data) {
     html += section("物理索引（indexes）", detail.indexes && detail.indexes.length
       ? fieldsTable(detail.indexes, ["id", "type", "fields"]) : `<div class="muted">（无）</div>`);
     html += section("ODB 索引（odbindexes）", detail.odbindexes && detail.odbindexes.length
-      ? fieldsTable(detail.odbindexes, ["id", "type", "fields"]) : `<div class="muted">（无）</div>`);
+      ? fieldsTable(detail.odbindexes, ["id", "type", "fields", "operate"]) : `<div class="muted">（无）</div>`);
     if (detail.sequences && detail.sequences.length)
       html += section("序列（dbSequence）", fieldsTable(detail.sequences, ["id", "longname"]));
   } else if (node.kind === "SERVICE_TYPE") {

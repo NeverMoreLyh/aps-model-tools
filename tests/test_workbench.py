@@ -46,7 +46,7 @@ FIXTURE_FILES = {
       <field id="status" type="Base.U_STATUS" ref="DemoDict.CustomerInfo.name"/>
     </fields>
     <indexes><index id="idx_status" type="index" fields="status"/></indexes>
-    <odbindexes><odbindex id="odb_id" type="unique" fields="id"/></odbindexes>
+    <odbindexes><index id="odb_id" type="unique" fields="id" operate="selectOne deleteOne"/></odbindexes>
     <dbSequence id="seq_demo"/>
   </table>
 </schema>

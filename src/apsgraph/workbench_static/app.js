@@ -404,7 +404,7 @@ function nodeLink(node, unresolvedFallback) {
 }
 
 function section(title, inner) {
-  return `<div class="detail-section"><h3>${esc(title)}</h3>${inner}</div>`;
+  return `<div class="detail-section"><h3>${title}</h3>${inner}</div>`;
 }
 
 function edgeSection(title, edges) {
@@ -593,7 +593,7 @@ function renderDetailSections(data) {
   } else if (node.kind === "SERVICE_TYPE") {
     for (const op of detail.operations || []) {
       const opNode = op.node || {};
-      html += section(`服务操作：${opNode.raw_id || ""} ${opNode.properties && opNode.properties.longname ? "· " + esc(opNode.properties.longname) : ""}`,
+      html += section(`服务操作：${esc(opNode.raw_id || "")} ${opNode.properties && opNode.properties.longname ? "· " + esc(opNode.properties.longname) : ""}`,
         section("输入（input）", fieldsTable(op.input, IO_COLS)) +
         section("输出（output）", fieldsTable(op.output, IO_COLS)));
     }
@@ -629,7 +629,7 @@ function renderDetailSections(data) {
     html += section("参数（parameter）", fieldsTable(detail.parameters, ["id", "type", "longname", "ref"]));
   } else if (node.kind === "ERRORCONF") {
     for (const group of detail.groups || []) {
-      const title = group.node ? `错误分组：${group.node.raw_id} ${group.node.properties && group.node.properties.longname ? "· " + esc(group.node.properties.longname) : ""}` : "错误码";
+      const title = group.node ? `错误分组：${esc(group.node.raw_id)} ${group.node.properties && group.node.properties.longname ? "· " + esc(group.node.properties.longname) : ""}` : "错误码";
       html += section(title, fieldsTable(group.errors, ERROR_COLS));
     }
     if (!detail.groups || !detail.groups.length) html += section("错误码", `<div class="muted">（无）</div>`);

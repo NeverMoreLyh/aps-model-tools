@@ -307,6 +307,78 @@ def _named_sql_texts(conn: sqlite3.Connection, node: Dict[str, Any],
     return []
 
 
+def _find_element_by_id(element: ET.Element, seg: str) -> Optional[ET.Element]:
+    for child in element.iter():
+        if child is element:
+            continue
+        if child.attrib.get("id") == seg:
+            return child
+    return None
+
+
+def _find_element_by_tag(element: ET.Element, tag: str) -> Optional[ET.Element]:
+    for child in element.iter():
+        if child is element:
+            continue
+        if _local_tag(child.tag) == tag:
+            return child
+    return None
+
+
+def _source_xml_fragment(conn: sqlite3.Connection, node: Dict[str, Any],
+                         source_root: Optional[Path]) -> Optional[Dict[str, str]]:
+    """Original XML fragment of a node, read on demand from its source file.
+
+    The fragment is never stored in SQLite.  The element is located by walking
+    the full_id id-chain inside the source document; nodes without their own
+    full_id (id-less containers) are located from the nearest ancestor's
+    full_id followed by the container tag chain.
+    """
+    if source_root is None or not node.get("file_path"):
+        return None
+    path = Path(source_root) / node["file_path"]
+    if not path.is_file():
+        return None
+    try:
+        root = ET.parse(path).getroot()
+    except (ET.ParseError, OSError):
+        return None
+    full_id = node.get("full_id") or ""
+    container_tags: List[str] = []
+    if full_id:
+        segments = full_id.split(".")
+    else:
+        segments, parent_id = [], node.get("owner_node_id")
+        while parent_id:
+            row = conn.execute(
+                "select owner_node_id, full_id, xml_tag from nodes where id=?",
+                (parent_id,)).fetchone()
+            if row is None:
+                return None
+            if row["full_id"]:
+                segments = row["full_id"].split(".")
+                break
+            container_tags.insert(0, str(row["xml_tag"]))
+            parent_id = row["owner_node_id"]
+        if not segments:
+            return None
+        container_tags.append(str(node.get("xml_tag")))
+    current = root
+    for seg in segments[1:]:
+        nxt = _find_element_by_id(current, seg)
+        if nxt is None:
+            return None
+        current = nxt
+    if not full_id:
+        for tag in container_tags:
+            nxt = _find_element_by_tag(current, tag)
+            if nxt is None:
+                return None
+            current = nxt
+    fragment = ET.tostring(current, encoding="unicode").strip()
+    return {"path": node["file_path"], "xml": fragment}
+
+
 def _resolve_node_row(conn: sqlite3.Connection, node_ref: str) -> sqlite3.Row:
     """Resolve a node by stable_id, or by exact full_id/raw_id as fallback."""
     row = conn.execute(NODE_SELECT + " where n.stable_id=?", (node_ref,)).fetchone()
@@ -615,6 +687,7 @@ def node_detail(conn: sqlite3.Connection, stable_id: str,
         detail["sqls"] = _named_sql_texts(conn, node, source_root)
     node["properties"] = node.get("properties") or {}
     return {"node": node, "children": children, "detail": detail,
+            "xml_fragment": _source_xml_fragment(conn, node, source_root),
             "out_edges": out_edges, "in_edges": in_edges}
 
 

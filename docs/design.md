@@ -1,6 +1,6 @@
 # APSGraph 设计文档
 
-> 版本：0.35.0
+> 版本：0.36.0
 > 更新时间：2026-09-17  
 > 文档定位：说明 APSGraph 的关键架构、模块设计、数据模型、算法、并发模型、性能设计和安全边界。
 
@@ -83,7 +83,7 @@
 
 ### 3.5.1 查询工作台（workbench）
 
-`apsgraph workbench` 用标准库 `http.server.ThreadingHTTPServer` 在 `127.0.0.1` 提供只读查询页面与 JSON API（`/api/search`、`/api/enums`、`/api/node`、`/api/children`、`/api/ddl`、`/api/top-groups`、`/api/dashboard`、`/api/stats`）：
+`apsgraph workbench` 用标准库 `http.server.ThreadingHTTPServer` 在 `127.0.0.1` 提供只读查询页面与 JSON API（`/api/search`、`/api/enums`、`/api/node`、`/api/children`、`/api/ddl`、`/api/top-groups`、`/api/parse-failures`、`/api/dashboard`、`/api/stats`；`/api/node` 载荷含 `xml_fragment`——按来源路径按需读取源 XML 并以 full_id 链定位节点，无 full_id 的容器节点沿 owner 链回溯加容器标签链定位，原始片段不写入 SQLite）：
 
 - 总览页 `/api/dashboard` 汇总索引统计（文件/解析状态/节点/边/未解析）、SQLite 文件大小与各页面记录数（复用各分组的空关键字计数），前端以卡片呈现并支持点击跳转；
 - 查询分组由 `KIND_GROUPS` 定义：枚举值（ENUM_VALUE）、数据字典（DICTIONARY，`.d_schema.xml`）、错误码（真实工程 `.error.xml` 为 `errorConf` 根，kind ERRORCONF，详情按 `errors>error` 分组展示 message 明细并支持按 message 搜索）、复合类型、字典数据项（ELEMENT 且父为 DICTIONARY、来源 `.d_schema.xml`，粒度 `BpDict.B.btch_grp_num`；排除复合类型的 element）、表、服务文件（SERVICE_TYPE）、服务（SERVICE_OPERATION，fullId 形如 `ApBatchFileService.smtbat`）、交易、批量交易、文件批量（FILE_BATCH_TRANSACTION，`.file_batch_tran.xml`）、命名SQL文件（SQL_GROUP，`.nsql.xml`，详情展示 NAMED_SQL 语句列表）、命名SQL（NAMED_SQL，粒度 `ApBatchFileSqls.upd_tb_file_tran_req`；NAMED_SQL 详情展示 parameter 子节点，并按需从源 XML 解析 SQL 文本按数据库类型展示——静态语句取 `<sql type="...">` 子元素，动态语句（dynamicSelect/dynamicSql）按 MyBatis mapper 机制原样展示每个 `<dynamicSql type="...">` 原始 XML 节点（含 str/test 等子节点）（无 type 为 NONE 且置顶；工作区由 db 路径推断——db 位于 `.apsgraph` 下时取其上级，源文件不可达时显示提示））、分片（SHARDINGSTRATEGY，`.sharding.xml`，详情展示 strategy 列表）、基础类型（RESTRICTION_TYPE，来源 `.u_schema.xml`）、常量（CONSTANT，来源 `.constant.xml`）；前端左侧菜单一二级聚合（一级为交易/服务/表/数据字典/枚举类型/基础类型，其余归入可展开的“其他”组，默认收起）；顶层模型页按 `owner_node_id IS NULL` 过滤并可按 kind 再过滤。

@@ -420,6 +420,25 @@ class WorkbenchQueryTest(WorkbenchTestBase):
         detail = node_detail(self.conn, owner["stable_id"])["detail"]
         self.assertEqual(["A", "I"], [item["raw_id"] for item in detail["enum_values"]])
 
+    def test_source_xml_fragment_for_every_model(self):
+        # 表节点：原始 XML 片段含自身与子结构
+        table = search_group(self.conn, "table", query="demo_user", dimension="id")
+        frag = node_detail(self.conn, table["results"][0]["stable_id"],
+                           source_root=self.root)["xml_fragment"]
+        self.assertEqual("tables/Demo.tables.xml", frag["path"])
+        self.assertIn('<table id="demo_user"', frag["xml"])
+        self.assertIn("<odbindexes>", frag["xml"])
+
+        # 字段/枚举值等任意节点均可定位
+        enums = search_group(self.conn, "enum", query="有效")
+        frag2 = node_detail(self.conn, enums["results"][0]["stable_id"],
+                            source_root=self.root)["xml_fragment"]
+        self.assertIn('id="A"', frag2["xml"])
+
+        # 不给 source_root 时不出现在载荷中（按需读取，不落库）
+        none_frag = node_detail(self.conn, table["results"][0]["stable_id"])["xml_fragment"]
+        self.assertIsNone(none_frag)
+
     def test_child_nodes_tree(self):
         schemas = search_group(self.conn, "top", root_kind="SCHEMA")
         demo_tables = next(item for item in schemas["results"] if item["full_id"] == "DemoTables")

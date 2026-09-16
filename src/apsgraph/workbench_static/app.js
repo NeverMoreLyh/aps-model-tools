@@ -799,6 +799,9 @@ async function showDetail(nodeRef, isBack = false) {
     html += renderDetailSections(data);
     if (data.children && data.children.length)
       html += section("包含子模型（点击展开）", `<div class="tree">${treeHtml(data.children)}</div>`);
+    if (data.xml_fragment)
+      html += section(`原始 XML 片段（${esc(data.xml_fragment.path)}）`,
+        `<pre class="sql-text">${esc(data.xml_fragment.xml)}</pre>`);
     html += edgeSection("引用（出）", data.out_edges || []);
     html += edgeSection("被引用（入）", data.in_edges || []);
     pane.innerHTML = html;

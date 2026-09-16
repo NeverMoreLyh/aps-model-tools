@@ -42,6 +42,8 @@ KIND_GROUPS: Dict[str, Dict[str, Any]] = {
     "error_item": {"kinds": {"ERROR"}, "suffix": ".error.xml"},
     # 基础类型：.u_schema.xml 中定义的 restrictionType（如 ApBaseType.U_ADDR）
     "base_type": {"kinds": {"RESTRICTION_TYPE"}, "suffix": ".u_schema.xml"},
+    # 常量数据项：.constant.xml 中 constantConf>constants>constant（message/description）
+    "constant": {"kinds": {"CONSTANT"}, "suffix": ".constant.xml"},
     "complex_type": {"kinds": {"COMPLEX_TYPE"}},
     # 字典数据项只收字典文件（.d_schema.xml，父节点为 DICTIONARY）下的 element，
     # 粒度为 full_id 形如 BpDict.B.btch_grp_num；复合类型的 element 不在此页。

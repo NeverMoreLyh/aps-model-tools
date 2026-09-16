@@ -12,10 +12,17 @@ const PAGES = [
   { id: "dict_element", label: "字典数据项", group: "dict_element" },
   { id: "dictionary", label: "数据字典", group: "dictionary" },
   { id: "enum", label: "枚举类型", group: "enum", enumMaster: true },
+  { id: "base_type", label: "基础类型", group: "base_type" },
   { id: "error_code", label: "错误码", group: "error_code" },
   { id: "error_item", label: "错误码数据项", group: "error_item" },
-  { id: "base_type", label: "基础类型", group: "base_type" },
+  { id: "constant", label: "常量", group: "constant" },
 ];
+
+/* 左侧菜单一二级聚合：一级菜单之外统一归入“其他” */
+const NAV_PRIMARY = ["transaction", "service", "table", "dict_element", "enum", "base_type"];
+const NAV_OTHER = ["top", "service_file", "batch", "complex_type", "dictionary",
+                   "error_code", "error_item", "constant"];
+let navOtherOpen = false;
 
 const BATCH_KINDS = ["BATCH_TRANSACTION", "FILE_BATCH_TRANSACTION", "BATCH_STEP", "BATCH_GROUP"];
 const BATCH_KIND_LABELS = {
@@ -46,13 +53,26 @@ async function api(path, params) {
 function renderNav() {
   const list = $("#nav-list");
   list.innerHTML = "";
-  for (const page of PAGES) {
+  const makeItem = (page) => {
     const li = document.createElement("li");
     li.textContent = page.label;
     li.dataset.page = page.id;
     if (page.id === state.pageId) li.classList.add("active");
     li.addEventListener("click", () => switchPage(page.id));
-    list.appendChild(li);
+    return li;
+  };
+  for (const id of NAV_PRIMARY) list.appendChild(makeItem(PAGES.find((p) => p.id === id)));
+  const group = document.createElement("li");
+  group.className = "nav-group";
+  group.textContent = `${navOtherOpen ? "▾" : "▸"} 其他`;
+  group.addEventListener("click", () => { navOtherOpen = !navOtherOpen; renderNav(); });
+  list.appendChild(group);
+  if (navOtherOpen) {
+    for (const id of NAV_OTHER) {
+      const li = makeItem(PAGES.find((p) => p.id === id));
+      li.classList.add("nav-sub");
+      list.appendChild(li);
+    }
   }
 }
 
@@ -76,6 +96,7 @@ function switchPage(pageId) {
   $("#detail-pane").innerHTML = "";
   detailHistory.stack = [];
   detailHistory.current = null;
+  if (NAV_OTHER.includes(pageId)) navOtherOpen = true;
   renderNav();
   runSearch();
 }

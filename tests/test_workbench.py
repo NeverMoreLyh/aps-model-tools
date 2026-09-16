@@ -100,6 +100,13 @@ FIXTURE_FILES = {
 <batchStepGroup id="demoStep" longname="演示批量步骤" package="demo.batch"/>
 """,
     # 真实工程 .error.xml 为 errorConf 根，errors 分组下挂 error 明细
+    "const/CfConst.constant.xml": """<?xml version="1.0"?>
+<constantConf id="CfConst" longname="客户副本常量定义">
+  <constants id="Busi" longname="业务种类名称">
+    <constant id="CONST_CUST_BTCH" message="CFTEMP" description="客户信息批量同步-回盘文件"/>
+  </constants>
+</constantConf>
+""",
     "err/MdError.error.xml": """<?xml version="1.0"?>
 <errorConf id="MdError" longname="介质错误码定义">
   <errors id="Cuce" longname="客户凭证错误信息">
@@ -206,6 +213,13 @@ class WorkbenchQueryTest(WorkbenchTestBase):
         self.assertEqual("MdError.Cuce.E0002", items["results"][0]["full_id"])
         self.assertEqual("ERROR", items["results"][0]["kind"])
         self.assertEqual(1, search_group(self.conn, "error_item", query="不存在", dimension="desc")["total"])
+
+        # 常量页：按 id/fullid/message 过滤 constantConf>constants>constant
+        consts = search_group(self.conn, "constant", query="CONST_CUST_BTCH", dimension="id")
+        self.assertEqual(1, consts["total"])
+        self.assertEqual("CfConst.Busi.CONST_CUST_BTCH", consts["results"][0]["full_id"])
+        self.assertEqual("CONSTANT", consts["results"][0]["kind"])
+        self.assertEqual(1, search_group(self.conn, "constant", query="CFTEMP", dimension="desc")["total"])
 
         # fullid 维度按 "." 分段层级匹配：省略中间分组段仍可定位
         hierarchical = search_group(self.conn, "error_item",

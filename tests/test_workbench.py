@@ -125,6 +125,7 @@ FIXTURE_FILES = {
   </strategies>
 </ShardingStrategy>
 """,
+    "broken/Bad.tables.xml": "<schema id=\"Bad\"><table",
     "const/CfConst.constant.xml": """<?xml version="1.0"?>
 <constantConf id="CfConst" longname="客户副本常量定义">
   <constants id="Busi" longname="业务种类名称">
@@ -504,10 +505,20 @@ class WorkbenchHttpTest(WorkbenchTestBase):
         status, body = self._get(f"/api/ddl?id={urllib.request.quote('DemoSvc.openAccount')}&dialect=mysql")
         self.assertEqual(400, status)  # 仅表节点支持 DDL 预览
 
+        status, body = self._get("/api/parse-failures")
+        self.assertEqual(200, status)
+        failures = json.loads(body)
+        self.assertEqual(1, failures["total"])
+        self.assertEqual("broken/Bad.tables.xml", failures["results"][0]["path"])
+        self.assertIn("error_message", failures["results"][0])
+        status, body = self._get("/api/parse-failures?q=nomatch")
+        self.assertEqual(0, json.loads(body)["total"])
+
         status, body = self._get("/api/dashboard")
         self.assertEqual(200, status)
         dash = json.loads(body)
         self.assertGreater(dash["db_size"], 0)
+        self.assertEqual(1, dash["stats"]["parse_failed"])
         self.assertIn("nodes", dash["stats"])
         self.assertEqual(3, dash["counts"]["table"])  # audit / base_cols / demo_user
         self.assertIn("enum", dash["counts"])

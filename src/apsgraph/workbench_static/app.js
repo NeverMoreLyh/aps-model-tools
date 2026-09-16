@@ -20,12 +20,14 @@ const PAGES = [
   { id: "file_batch", label: "文件批量", group: "file_batch" },
   { id: "nsql", label: "命名SQL", group: "nsql" },
   { id: "sharding", label: "分片", group: "sharding" },
+  { id: "parse_failed", label: "解析失败", group: "parse_failed" },
 ];
 
 /* 左侧菜单一二级聚合：一级菜单之外统一归入“其他” */
 const NAV_PRIMARY = ["transaction", "service", "table", "dict_element", "enum", "base_type"];
 const NAV_OTHER = ["top", "service_file", "batch", "file_batch", "nsql", "sharding",
-                   "complex_type", "dictionary", "error_code", "error_item", "constant"];
+                   "complex_type", "dictionary", "error_code", "error_item", "constant",
+                   "parse_failed"];
 let navOtherOpen = false;
 /* 折叠窄条上的单字徽标（未指定的取中文名首字） */
 const NAV_SHORT = { dashboard: "总", transaction: "F", service: "S", table: "T",
@@ -157,9 +159,14 @@ async function renderDashboard() {
       ["节点", stats.nodes],
       ["边", stats.edges],
       ["未解析引用", stats.unresolved],
-    ].map(([label, value]) =>
-      `<div class="dash-stat${label === "解析失败" && value > 0 ? " dash-warn" : ""}">` +
-      `<span class="dash-num">${esc(value)}</span><span class="dash-label">${esc(label)}</span></div>`).join("");
+    ].map(([label, value]) => {
+      const clickable = label === "解析失败";
+      const warn = label === "解析失败" && value > 0 ? " dash-warn" : "";
+      const click = clickable ? " dash-click" : "";
+      const pageAttr = clickable ? ` data-page="parse_failed"` : "";
+      return `<div class="dash-stat${warn}${click}"${pageAttr}>` +
+        `<span class="dash-num">${esc(value)}</span><span class="dash-label">${esc(label)}</span></div>`;
+    }).join("");
     const cards = DASH_CARDS.map((card) => {
       const page = PAGES.find((p) => p.group === card.group);
       return `<div class="dash-card" data-page="${page ? page.id : "top"}">
@@ -167,7 +174,7 @@ async function renderDashboard() {
         <div class="label">${esc(card.label)}</div></div>`;
     }).join("");
     body.innerHTML = `<div class="dash-stats">${statsHtml}</div><div class="dash-grid">${cards}</div>`;
-    body.querySelectorAll(".dash-card").forEach((card) =>
+    body.querySelectorAll(".dash-card, .dash-stat[data-page]").forEach((card) =>
       card.addEventListener("click", () => switchPage(card.dataset.page)));
   } catch (error) {
     body.innerHTML = `<div class="error-banner">${esc(error.message)}</div>`;
@@ -180,6 +187,12 @@ async function runSearch() {
   state.query = query;
   state.dimension = $("#dimension").value;
   try {
+    if (state.pageId === "parse_failed") {
+      const payload = await api("/api/parse-failures", { q: query });
+      renderParseFailures(payload.results, payload.total);
+      updatePager();
+      return;
+    }
     if (PAGES.find((p) => p.id === state.pageId).enumMaster) {
       const payload = await api("/api/enums", { q: query, page: state.page });
       state.total = payload.total || 0;
@@ -245,6 +258,22 @@ function renderTopResults(items) {
   }
   $("#results-body").innerHTML = html;
   bindRowClick();
+}
+
+function renderParseFailures(items, total) {
+  const meta = $("#results-meta");
+  meta.textContent = `解析失败：共 ${total} 个文件` + (state.query ? `，匹配 “${state.query}”` : "");
+  if (!items.length) {
+    $("#results-body").innerHTML = `<div class="empty-tip">没有解析失败的文件。</div>`;
+    return;
+  }
+  const rows = items.map((item) => `<tr class="static-row">
+    <td class="ellipsis" title="${esc(item.path)}">${esc(item.path)}</td>
+    <td><span class="kind-badge">${esc(item.suffix)}</span></td>
+    <td class="error-msg">${esc(item.error_message || "（无错误信息）")}</td></tr>`).join("");
+  $("#results-body").innerHTML = `<table class="result-table">
+    <thead><tr><th>文件路径</th><th>后缀</th><th>错误信息</th></tr></thead>
+    <tbody>${rows}</tbody></table>`;
 }
 
 /* 枚举类型页：左（中）列枚举 Fullid，点击右侧展示枚举详情与枚举值 */

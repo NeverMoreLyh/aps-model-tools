@@ -64,6 +64,9 @@ body { font: 14px/1.5 -apple-system, "PingFang SC", "Microsoft YaHei", sans-seri
 .dash-card:hover { border-color: var(--accent); background: var(--accent-soft); }
 .dash-card .num { font-size: 24px; font-weight: 700; color: var(--accent); }
 .dash-card .label { font-size: 13px; margin-top: 4px; }
+.dash-click { cursor: pointer; }
+.dash-click:hover { outline: 1px solid var(--accent); }
+.error-msg { word-break: break-all; color: #cf222e; font-size: 12px; }
 #pane-resizer { width: 6px; flex: none; cursor: col-resize; background: transparent; }
 #pane-resizer:hover { background: var(--border); }
 body.resizing { cursor: col-resize; user-select: none; }

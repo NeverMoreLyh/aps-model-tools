@@ -625,6 +625,21 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
         finally:
             conn.close()
 
+    def _api_parse_failures(self, conn: sqlite3.Connection,
+                            params: Dict[str, List[str]]) -> Dict[str, Any]:
+        """Files that failed to parse, with their error messages."""
+        query = params.get("q", [""])[0]
+        sql = """select path, suffix, error_message
+                 from model_files where parse_status='PARSE_FAILED'"""
+        params_list: List[Any] = []
+        if query:
+            sql += " and (path like ? escape '\\' or error_message like ? escape '\\')"
+            escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            params_list = [f"%{escaped}%", f"%{escaped}%"]
+        rows = conn.execute(sql + " order by path", params_list).fetchall()
+        return {"total": len(rows),
+                "results": [dict(row) for row in rows]}
+
     def _api_children(self, params: Dict[str, List[str]]) -> Dict[str, Any]:
         stable_id = params.get("id", [""])[0]
         if not stable_id:
@@ -666,6 +681,12 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
                 conn.close()
         elif path == "/api/search":
             self._send_json(self._api_search(params))
+        elif path == "/api/parse-failures":
+            conn = connect(self.db_path, read_only=True)
+            try:
+                self._send_json(self._api_parse_failures(conn, params))
+            finally:
+                conn.close()
         elif path == "/api/dashboard":
             conn = connect(self.db_path, read_only=True)
             try:

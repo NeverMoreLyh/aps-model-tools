@@ -303,27 +303,46 @@ function cleanMermaidLabel(value) {
 function buildMermaidCode(steps) {
   const lines = ["flowchart TB", `S(["开始"])`];
   let seq = 0;
-  // 纵向流程：所有步骤（含 case/when 分支与其服务）按执行顺序垂直串联，
-  // 不做水平分叉；when 的条件标注在进入该分支的边上。
-  function walk(nodes, prevId) {
-    let last = prevId;
-    for (const node of nodes) {
-      const id = `N${seq++}`;
-      const isCase = node.xml_tag === "case";
-      const base = node.label || node.raw_id || "";
-      const text = cleanMermaidLabel(base === node.longname ? base : `${base} ${node.longname || ""}`);
-      let edgeText = "";
-      if (node.xml_tag === "when") {
-        edgeText = cleanMermaidLabel(node.longname || node.test).slice(0, 40);
-      }
-      lines.push(`${last} -->${edgeText ? `|${edgeText}|` : ""} ${id}${isCase ? "{" : "["}"${text}"${isCase ? "}" : "]"}`);
-      last = (node.children && node.children.length) ? walk(node.children, id) : id;
-    }
-    return last;
+  function define(node, shape) {
+    const id = `N${seq++}`;
+    const base = node.label || node.raw_id || "";
+    const text = cleanMermaidLabel(base === node.longname ? base : `${base} ${node.longname || ""}`);
+    lines.push(`${id}${shape === "case" ? "{" : "["}"${text}"${shape === "case" ? "}" : "]"}`);
+    return id;
   }
-  const lastId = walk(steps, "S");
+  function connect(frontier, target, label) {
+    const edge = label ? `|${cleanMermaidLabel(label).slice(0, 40)}|` : "";
+    for (const from of frontier) lines.push(`${from} -->${edge} ${target}`);
+  }
+  /* 执行一个兄弟节点序列；返回序列结束时的出口节点集合（分支各自汇合） */
+  function emitSequence(nodes, frontier) {
+    for (const node of nodes) {
+      if (node.xml_tag === "case") {
+        const caseId = define(node, "case");
+        connect(frontier, caseId);
+        let branchExits = [];
+        for (const child of node.children || []) {
+          const whenId = define(child, "step");
+          connect([caseId], whenId);
+          branchExits = branchExits.concat(
+            (child.children && child.children.length)
+              ? emitSequence(child.children, [whenId]).exits
+              : [whenId]);
+        }
+        frontier = branchExits;
+      } else {
+        const id = define(node, "step");
+        connect(frontier, id);
+        frontier = (node.children && node.children.length)
+          ? emitSequence(node.children, [id]).exits
+          : [id];
+      }
+    }
+    return { exits: frontier };
+  }
+  const { exits } = emitSequence(steps, ["S"]);
   lines.push(`E(["结束"])`);
-  lines.push(`${lastId} --> E`);
+  for (const exit of exits) lines.push(`${exit} --> E`);
   return lines.join("\n");
 }
 

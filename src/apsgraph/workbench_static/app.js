@@ -27,6 +27,9 @@ const NAV_PRIMARY = ["transaction", "service", "table", "dict_element", "enum", 
 const NAV_OTHER = ["top", "service_file", "batch", "file_batch", "nsql", "sharding",
                    "complex_type", "dictionary", "error_code", "error_item", "constant"];
 let navOtherOpen = false;
+/* 折叠窄条上的单字徽标（未指定的取中文名首字） */
+const NAV_SHORT = { dashboard: "总", transaction: "T", service: "S", table: "T",
+                    dict_element: "D", enum: "E", base_type: "U" };
 
 const BATCH_KINDS = ["BATCH_TRANSACTION", "FILE_BATCH_TRANSACTION", "BATCH_STEP", "BATCH_GROUP"];
 const BATCH_KIND_LABELS = {
@@ -57,9 +60,11 @@ async function api(path, params) {
 function renderNav() {
   const list = $("#nav-list");
   list.innerHTML = "";
+  const collapsed = $("#layout").classList.contains("nav-collapsed");
   const makeItem = (page) => {
     const li = document.createElement("li");
-    li.textContent = page.label;
+    li.textContent = collapsed ? (NAV_SHORT[page.id] || page.label.charAt(0)) : page.label;
+    li.title = page.label;
     li.dataset.page = page.id;
     if (page.id === state.pageId) li.classList.add("active");
     li.addEventListener("click", () => switchPage(page.id));
@@ -69,7 +74,8 @@ function renderNav() {
   for (const id of NAV_PRIMARY) list.appendChild(makeItem(PAGES.find((p) => p.id === id)));
   const group = document.createElement("li");
   group.className = "nav-group";
-  group.textContent = `${navOtherOpen ? "▾" : "▸"} 其他`;
+  group.title = "其他";
+  group.textContent = collapsed ? "其他" : `${navOtherOpen ? "▾" : "▸"} 其他`;
   group.addEventListener("click", () => { navOtherOpen = !navOtherOpen; renderNav(); });
   list.appendChild(group);
   if (navOtherOpen) {
@@ -781,6 +787,7 @@ function initLayoutControls() {
   const layout = $("#layout");
   $("#nav-toggle").addEventListener("click", () => {
     layout.classList.toggle("nav-collapsed");
+    renderNav();
   });
   const resizer = $("#pane-resizer");
   const results = $("#results-pane");

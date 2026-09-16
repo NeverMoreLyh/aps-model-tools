@@ -1,6 +1,6 @@
 # APSGraph 使用说明
 
-> 版本：0.34.2
+> 版本：0.35.0
 > 更新时间：2026-09-17
 > 项目地址：https://github.com/NeverMoreLyh/aps-model-tools
 
@@ -107,10 +107,11 @@ apsgraph scan
 | `--db` | SQLite 索引输出路径（默认 `.apsgraph/apsgraph.db`） |
 | `--fail-on-parse-error` | 遇到解析错误时立即终止（默认跳过并记录） |
 | `--external-db` | 合并其他 XML 扫描生成的 APS SQLite 索引，可重复 |
+| `--show-warning` | 扫描汇总后在 stderr 列出未解析引用警告明细（默认只显示数量） |
 
-普通 `scan` 只解析 workspace XML 并写入 SQLite；未解析引用不会导致失败，JSON 的 `unresolved_models` 会列出缺失模型名，CLI 同时在 stderr 输出 warning。使用 `--external-db` 时可合并其他 XML 扫描生成的 SQLite 索引。扫描器不会把 error 描述、SQL/Java primitive、`class` / `resultClass` Java 类名当作 APS 模型引用，并会把空格分隔的多值 `extension` 拆成多条 EXTENDS 边。
+普通 `scan` 只解析 workspace XML 并写入 SQLite；未解析引用不会导致失败，缺失模型名仅以警告数量计入汇总（需要明细时用 `--show-warning` 在 stderr 列出）。使用 `--external-db` 时可合并其他 XML 扫描生成的 SQLite 索引。扫描器不会把 error 描述、SQL/Java primitive、`class` / `resultClass` Java 类名当作 APS 模型引用，并会把空格分隔的多值 `extension` 拆成多条 EXTENDS 边。
 
-扫描和同步的进度以单行进度条写入 stderr（原地刷新，不刷屏），完成后输出一条汇总信息（文件解析结果、节点/边/未解析引用、耗时）；JSON 结果仍只写入 stdout，便于终端查看和脚本消费。
+扫描和同步的进度以单行进度条写入 stderr（原地刷新，不刷屏），完成后输出一条汇总信息（文件解析结果、节点/边/未解析引用与警告数、耗时）；`scan` 的 stdout 不再输出 JSON，汇总即最终输出；其他命令的 JSON 仍只写 stdout。
 
 **扫描的文件类型**（27 种 XML 后缀）：
 `.tables.xml`、`.parms.xml`、`.flowtrans.xml`、`.nsql.xml`、`.batchStep.xml`、`.batchgroup.xml`、`.serviceType.xml`、`.serviceImpl.xml`、`.sharding.xml`、`.workflow.xml` 等。

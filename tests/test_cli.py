@@ -1,5 +1,6 @@
 import contextlib
 import io
+import sys
 import json
 import os
 import tempfile
@@ -108,6 +109,43 @@ class CliTest(unittest.TestCase):
 
         self.assertEqual(0, rc)
         self.assertTrue((workspace / ".apsgraph/apsgraph.db").is_file())
+
+    def test_scan_stderr_summary_and_show_warning_flag(self):
+        import contextlib
+        import io
+
+        workspace = Path(self.tmp.name) / "warn-workspace"
+        workspace.mkdir(parents=True, exist_ok=True)
+        # 引用一个不存在的模型，产生 unresolved warning
+        (workspace / "Demo.tables.xml").write_text(
+            '<schema id="Demo"><table id="t"><fields>'
+            '<field id="f" type="Missing.U_NOPE"/></fields></table></schema>',
+            encoding="utf-8")
+        err = io.StringIO()
+        old_stderr = sys.stderr
+        sys.stderr = err
+        try:
+            rc = main(["scan", "--workspace", str(workspace), "--db", str(self.db)])
+        finally:
+            sys.stderr = old_stderr
+        self.assertEqual(0, rc)
+        err_text = err.getvalue()
+        self.assertIn("scan 完成", err_text)
+        self.assertIn("警告 1", err_text)
+        self.assertNotIn("unresolved model reference", err_text)
+        self.assertEqual("", sys.stdout.getvalue() if hasattr(sys.stdout, "getvalue") else "")
+
+        err = io.StringIO()
+        old_stderr = sys.stderr
+        sys.stderr = err
+        try:
+            rc = main(["scan", "--workspace", str(workspace), "--db", str(self.db),
+                       "--show-warning"])
+        finally:
+            sys.stderr = old_stderr
+        self.assertEqual(0, rc)
+        self.assertIn("warning: unresolved model reference: Missing.U_NOPE",
+                      err.getvalue())
 
     def test_search_cli_returns_ranked_model_metadata(self):
         workspace = Path(self.tmp.name) / "search-workspace"

@@ -88,10 +88,11 @@ def _progress_bar_end() -> None:
 
 
 def _print_scan_summary(summary: Dict[str, Any], elapsed: float) -> None:
+    warnings = len(summary.get("unresolved_models") or [])
     sys.stderr.write(
         f"[apsgraph] scan 完成：{summary['parsed_files']}/{summary['discovered_files']} "
         f"文件已解析，{summary['failed_files']} 失败；节点 {summary['nodes']}，边 {summary['edges']}，"
-        f"未解析引用 {summary['unresolved']}；耗时 {elapsed:.1f}s\n")
+        f"未解析引用 {summary['unresolved']}（警告 {warnings}）；耗时 {elapsed:.1f}s\n")
 
 
 DEFAULT_DB = Path(".apsgraph/apsgraph.db")
@@ -140,6 +141,8 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument("--fail-on-parse-error", action="store_true")
     scan.add_argument("--external-db", action="append", type=Path, default=[], metavar="DB",
                       help="merge an APS SQLite index produced from another XML scan; repeatable")
+    scan.add_argument("--show-warning", action="store_true",
+                      help="list unresolved model reference warnings on stderr after the scan summary")
 
     options = sub.add_parser(
         "options",
@@ -356,17 +359,14 @@ def main(argv: Optional[List[str]] = None) -> int:
                 summary, external = scan_workspace_with_external_indexes(
                     args.workspace, args.db, external_indexes, args.fail_on_parse_error, _progress_bar
                 )
-                _progress_bar_end()
-                _print_scan_summary(asdict(summary), time.time() - started)
-                _json({"scan": asdict(summary), "external": external})
             else:
                 summary = scan_workspace(args.workspace, args.db, args.fail_on_parse_error, _progress_bar)
-                _progress_bar_end()
-                _print_scan_summary(asdict(summary), time.time() - started)
+            _progress_bar_end()
+            _print_scan_summary(asdict(summary), time.time() - started)
+            if args.show_warning:
                 for target in summary.unresolved_models:
                     print(f"[apsgraph] warning: unresolved model reference: {target}",
                           file=sys.stderr, flush=True)
-                _json(asdict(summary))
             return 0
         if args.command == "options":
             _json(_options_report(args.workspace))

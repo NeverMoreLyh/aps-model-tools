@@ -438,7 +438,7 @@ apsgraph workbench --port 9000 --no-browser
 页面与查询能力：
 
 1. **顶层模型**：按顶层模型类型（SCHEMA / SQL_GROUP / SERVICE_TYPE / TRANSACTION / BATCH_TRANSACTION 等）分组列出所有顶层节点；点击节点在详情面板展示递归包含的子模型树（逐层懒加载展开）。
-2. **类型查询页**：表、服务文件（SERVICE_TYPE）、服务（SERVICE_OPERATION，按 `服务文件.服务id` 维度搜索，如 `ApBatchFileService.smtbat`）、交易、批量交易（页内可切换 FILE_BATCH_TRANSACTION / BATCH_STEP / BATCH_GROUP）、复合类型、数据字典（仅收字典文件 `.d_schema.xml` 中 DICTIONARY 节点下的 element，粒度为 `BpDict.B.btch_grp_num` 这类 `字典文件id.子模块.id`；复合类型的 element 不在此页）、数据字典、枚举类型、错误码、错误码（kind ERROR，粒度为 `GnError.Genl.E0001` 这类 fullId；fullId 维度支持按 `.` 分段的层级筛选，省略中间分组段仍可定位）、常量（`.constant.xml` 中 constantConf>constants>constant，粒度 `CfConst.Busi.CONST_XXX`，支持按 message/description 模糊搜索）。
+2. **类型查询页**：表、服务文件（SERVICE_TYPE）、服务（SERVICE_OPERATION，按 `服务文件.服务id` 维度搜索，如 `ApBatchFileService.smtbat`）、交易、批量交易（页内可切换 FILE_BATCH_TRANSACTION / BATCH_STEP / BATCH_GROUP）、文件批量（FILE_BATCH_TRANSACTION）、命名SQL（SQL_GROUP）、分片（SHARDINGSTRATEGY）、复合类型、数据字典（仅收字典文件 `.d_schema.xml` 中 DICTIONARY 节点下的 element，粒度为 `BpDict.B.btch_grp_num` 这类 `字典文件id.子模块.id`；复合类型的 element 不在此页）、数据字典文件、枚举类型、基础类型、错误码文件、错误码（kind ERROR，粒度为 `GnError.Genl.E0001` 这类 fullId；fullId 维度支持按 `.` 分段的层级筛选，省略中间分组段仍可定位）、常量（`.constant.xml` 中 constantConf>constants>constant，粒度 `CfConst.Busi.CONST_XXX`，支持按 message/description 模糊搜索）。
 3. **枚举类型页为主从布局**：列表展示枚举的 FullId 与枚举值数量，点击后右侧展示枚举详情与全部枚举值。
 4. **错误码文件页**：查询对象为 `.error.xml` 的 `errorConf` 根（kind ERRORCONF），详情按 `errors` 分组展示 error 明细（错误码 ID、类型、message），并支持按 message 模糊搜索。
 5. **基础类型**：查询 `.u_schema.xml` 中定义的基础类型（RESTRICTION_TYPE，如 `ApBaseType.U_ADDR`），支持按 `id` / `fullId` / `longname` / `desc` 模糊搜索；详情展示 `base`/`maxLength` 等属性及其枚举值。

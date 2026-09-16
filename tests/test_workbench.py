@@ -115,6 +115,8 @@ FIXTURE_FILES = {
     <parameterMap class="java.util.Map">
       <parameter id="org_num" type="Base.U_NAME" property="org_num" longname="机构号"/>
     </parameterMap>
+    <sql>UPDATE kstb_demo SET org_num = #org_num#</sql>
+    <sql type="oracle">UPDATE kstb_demo SET org_num = #org_num#</sql>
   </update>
 </sqls>
 """,
@@ -262,6 +264,12 @@ class WorkbenchQueryTest(WorkbenchTestBase):
         self.assertEqual(["upd_demo"], [s["raw_id"] for s in nsql_detail["statements"]])
         stmt_detail = node_detail(self.conn, nsql_detail["statements"][0]["stable_id"])["detail"]
         self.assertEqual(["org_num"], [p["raw_id"] for p in stmt_detail["parameters"]])
+        # SQL 文本从源文件按需解析，按数据库类型展示且 NONE 默认置顶
+        sqls = node_detail(self.conn, nsql_detail["statements"][0]["stable_id"],
+                           source_root=self.root)["detail"]["sqls"]
+        self.assertEqual(["NONE", "oracle"], [item["type"] for item in sqls])
+        self.assertIn("UPDATE kstb_demo", sqls[0]["text"])
+        self.assertEqual([], node_detail(self.conn, nsql_detail["statements"][0]["stable_id"])["detail"]["sqls"])
 
         sharding = search_group(self.conn, "sharding", query="aplt", dimension="id")
         self.assertEqual(1, sharding["total"])

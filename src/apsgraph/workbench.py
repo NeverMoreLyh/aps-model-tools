@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import xml.etree.ElementTree as ET
 import sys
 import threading
 import webbrowser
@@ -254,6 +255,36 @@ def validate_ddl_sql(sql: str, dialect: str) -> Dict[str, Any]:
                 "statements": 0, "hint": ""}
     return {"available": True, "valid": True, "errors": [],
             "statements": create_tables, "hint": ""}
+
+
+def _local_tag(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1]
+
+
+def _named_sql_texts(conn: sqlite3.Connection, node: Dict[str, Any],
+                     source_root: Optional[Path]) -> List[Dict[str, str]]:
+    """Extract the per-database SQL texts of a NAMED_SQL from its source XML.
+
+    The statement's <sql type="..."> children carry the SQL as CDATA, which is
+    not copied into the index; re-read the source file on demand.  ``type``
+    defaults to NONE when absent.
+    """
+    if source_root is None or not node.get("file_path"):
+        return []
+    path = Path(source_root) / node["file_path"]
+    if not path.is_file():
+        return []
+    try:
+        root = ET.parse(path).getroot()
+    except (ET.ParseError, OSError):
+        return []
+    tag, raw_id = node.get("xml_tag"), node.get("raw_id")
+    for element in root.iter():
+        if (_local_tag(element.tag) == tag and element.attrib.get("id") == raw_id):
+            return [{"type": str(child.attrib.get("type") or "NONE"),
+                     "text": (child.text or "").strip()}
+                    for child in element if _local_tag(child.tag) == "sql"]
+    return []
 
 
 def _resolve_node_row(conn: sqlite3.Connection, node_ref: str) -> sqlite3.Row:
@@ -535,11 +566,13 @@ def _detail_for_kind(conn: sqlite3.Connection, kind: str, node_id: int) -> Dict[
     return {}
 
 
-def node_detail(conn: sqlite3.Connection, stable_id: str) -> Dict[str, Any]:
+def node_detail(conn: sqlite3.Connection, stable_id: str,
+                source_root: Optional[Path] = None) -> Dict[str, Any]:
     """Full detail payload: node, direct children, structured view, and edges.
 
     ``stable_id`` also accepts exact full_id or raw_id values so UI links such
-    as flow ``serviceName`` targets resolve to a single node.
+    as flow ``serviceName`` targets resolve to a single node.  ``source_root``
+    enables on-demand source extraction (named SQL texts) when provided.
     """
     row = _resolve_node_row(conn, stable_id)
     node = _row_to_dict(row)
@@ -558,6 +591,8 @@ def node_detail(conn: sqlite3.Connection, stable_id: str) -> Dict[str, Any]:
         item = {"relation_kind": edge["relation_kind"], "target": target}
         (out_edges if edge["from_id"] == root else in_edges).append(item)
     detail = _detail_for_kind(conn, node["kind"], node["id"])
+    if node["kind"] == "NAMED_SQL":
+        detail["sqls"] = _named_sql_texts(conn, node, source_root)
     node["properties"] = node.get("properties") or {}
     return {"node": node, "children": children, "detail": detail,
             "out_edges": out_edges, "in_edges": in_edges}
@@ -621,7 +656,10 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
             raise ValueError("missing node id")
         conn = connect(self.db_path, read_only=True)
         try:
-            return node_detail(conn, stable_id)
+            source_root = (self.db_path.parent.parent
+                           if self.db_path.parent.name == ".apsgraph"
+                           else self.db_path.parent)
+            return node_detail(conn, stable_id, source_root=source_root)
         finally:
             conn.close()
 

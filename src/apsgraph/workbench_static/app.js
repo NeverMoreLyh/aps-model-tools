@@ -614,6 +614,12 @@ function renderDetailSections(data) {
     else html += section("命名SQL", `<div class="muted">（无）</div>`);
   } else if (node.kind === "NAMED_SQL") {
     html += section("参数（parameter）", fieldsTable(detail.parameters, ["id", "property", "type", "javaType", "ref", "mode", "longname"]));
+    const sqls = (detail.sqls || []).slice()
+      .sort((a, b) => (a.type === "NONE" ? -1 : b.type === "NONE" ? 1 : 0));
+    html += section("SQL语句（按数据库类型）", sqls.length ? sqls.map((item) =>
+      `<div class="sql-block"><div class="sql-type">${esc(item.type)}</div>` +
+      `<pre class="sql-text">${esc(item.text)}</pre></div>`).join("")
+      : `<div class="muted">（源文件不可达或未包含 SQL 文本）</div>`);
   } else if (node.kind === "SHARDINGSTRATEGY") {
     html += section("分片策略（strategies）", detail.strategies && detail.strategies.length
       ? fieldsTable(detail.strategies, ["id", "name", "clazzImpl"]) : `<div class="muted">（无）</div>`);

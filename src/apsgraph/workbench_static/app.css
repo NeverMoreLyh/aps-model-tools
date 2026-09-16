@@ -67,6 +67,9 @@ body { font: 14px/1.5 -apple-system, "PingFang SC", "Microsoft YaHei", sans-seri
 .dash-click { cursor: pointer; }
 .dash-click:hover { outline: 1px solid var(--accent); }
 .error-msg { word-break: break-all; color: #cf222e; font-size: 12px; }
+.sql-block { margin-bottom: 10px; }
+.sql-type { display: inline-block; font-size: 11px; padding: 1px 8px; border-radius: 8px; background: #ddf4ff; color: #0969da; margin-bottom: 4px; }
+.sql-text { margin: 0; background: #0d1117; color: #e6edf3; padding: 10px; border-radius: 6px; overflow: auto; max-height: 320px; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; word-break: break-all; }
 #pane-resizer { width: 6px; flex: none; cursor: col-resize; background: transparent; }
 #pane-resizer:hover { background: var(--border); }
 body.resizing { cursor: col-resize; user-select: none; }

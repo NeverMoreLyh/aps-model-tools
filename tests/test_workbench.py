@@ -9,7 +9,6 @@ from pathlib import Path
 from apsgraph.scanner import scan_workspace
 from apsgraph.store import connect
 from apsgraph.workbench import (
-    BASIC_TYPES,
     WorkbenchServer,
     child_nodes,
     enum_groups,
@@ -317,11 +316,16 @@ class WorkbenchQueryTest(WorkbenchTestBase):
         self.assertEqual("DemoTables.demo_user", children[0]["full_id"])
         self.assertTrue(children[0]["has_children"])
 
-    def test_basetype_catalog(self):
-        catalog = search_group(self.conn, "basetype", query="金额")
+    def test_base_type_group_queries_u_schema(self):
+        catalog = search_group(self.conn, "base_type", query="U_STATUS", dimension="id")
         self.assertEqual(1, catalog["total"])
-        self.assertEqual("amount", catalog["results"][0]["name"])
-        self.assertEqual(len(BASIC_TYPES), 29)
+        item = catalog["results"][0]
+        self.assertEqual("RESTRICTION_TYPE", item["kind"])
+        self.assertEqual("Base.U_STATUS", item["full_id"])
+        self.assertTrue(item["file_path"].endswith(".u_schema.xml"))
+        # 详情携带 base/maxLength 属性与枚举值
+        detail = node_detail(self.conn, item["stable_id"])["detail"]
+        self.assertEqual(["A", "I"], [e["raw_id"] for e in detail["enum_values"]])
 
 
 class WorkbenchHttpTest(WorkbenchTestBase):
@@ -373,9 +377,9 @@ class WorkbenchHttpTest(WorkbenchTestBase):
         payload = json.loads(body)
         self.assertEqual(1, payload["total"])
 
-        status, body = self._get("/api/search?group=basetype")
+        status, body = self._get("/api/search?group=base_type&q=U_STATUS&field=id")
         self.assertEqual(200, status)
-        self.assertEqual(29, len(json.loads(body)["results"]))
+        self.assertEqual(1, json.loads(body)["total"])
 
         status, body = self._get("/api/enums?q=U_STATUS")
         self.assertEqual(200, status)

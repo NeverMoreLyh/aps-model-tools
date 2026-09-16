@@ -40,6 +40,8 @@ KIND_GROUPS: Dict[str, Dict[str, Any]] = {
     "error_code": {"kinds": {"ERRORCONF"}, "suffix": ".error.xml"},
     # 错误码数据项：粒度为 GnError.Genl.E0001 这类 error 明细节点
     "error_item": {"kinds": {"ERROR"}, "suffix": ".error.xml"},
+    # 基础类型：.u_schema.xml 中定义的 restrictionType（如 ApBaseType.U_ADDR）
+    "base_type": {"kinds": {"RESTRICTION_TYPE"}, "suffix": ".u_schema.xml"},
     "complex_type": {"kinds": {"COMPLEX_TYPE"}},
     # 字典数据项只收字典文件（.d_schema.xml，父节点为 DICTIONARY）下的 element，
     # 粒度为 full_id 形如 BpDict.B.btch_grp_num；复合类型的 element 不在此页。
@@ -67,41 +69,6 @@ LIKE_COLUMNS: Dict[str, List[str]] = {
              "json_extract(n.properties_json,'$.message')"],
 }
 LIKE_COLUMNS[""] = sorted({column for columns in LIKE_COLUMNS.values() for column in columns})
-
-# APS SimpleType built-in base types with their database column mappings
-# (docs/aps-type-database-mapping.md, APS 6.51.173 baseline).
-BASIC_TYPES: List[Dict[str, str]] = [
-    {"name": "string", "java": "可变长字符串", "mysql": "varchar", "oracle": "varchar2", "postgresql": "varchar"},
-    {"name": "fixString", "java": "定长字符串", "mysql": "char", "oracle": "char", "postgresql": "char"},
-    {"name": "eString", "java": "数据库加密字符串", "mysql": "varchar", "oracle": "varchar2", "postgresql": "varchar"},
-    {"name": "encString", "java": "加密字符串", "mysql": "varchar", "oracle": "varchar2", "postgresql": "varchar"},
-    {"name": "cString", "java": "中文字符串", "mysql": "varchar", "oracle": "varchar2", "postgresql": "varchar"},
-    {"name": "dateString", "java": "日期字符串", "mysql": "varchar", "oracle": "varchar2", "postgresql": "varchar"},
-    {"name": "dateString8", "java": "8位日期字符串", "mysql": "date", "oracle": "date", "postgresql": "date"},
-    {"name": "timeString17", "java": "时间字符串", "mysql": "datetime", "oracle": "timestamp", "postgresql": "datetime"},
-    {"name": "boolean", "java": "布尔值", "mysql": "char", "oracle": "char", "postgresql": "boolean"},
-    {"name": "int", "java": "整型", "mysql": "int", "oracle": "number", "postgresql": "integer"},
-    {"name": "integer", "java": "整型（兼容int）", "mysql": "int", "oracle": "number", "postgresql": "integer"},
-    {"name": "long", "java": "长整型", "mysql": "bigint", "oracle": "number", "postgresql": "bigint"},
-    {"name": "double", "java": "浮点/数值", "mysql": "decimal", "oracle": "number", "postgresql": "decimal"},
-    {"name": "decimal", "java": "可带小数数值", "mysql": "decimal", "oracle": "number", "postgresql": "decimal"},
-    {"name": "amount", "java": "金额", "mysql": "decimal", "oracle": "number", "postgresql": "decimal"},
-    {"name": "date", "java": "日期", "mysql": "date", "oracle": "date", "postgresql": "date"},
-    {"name": "time", "java": "时间", "mysql": "time", "oracle": "date", "postgresql": "time"},
-    {"name": "dateTime", "java": "时间戳", "mysql": "dateTime", "oracle": "date", "postgresql": "timestamp"},
-    {"name": "timestamp", "java": "时间戳", "mysql": "timestamp", "oracle": "timestamp", "postgresql": "timestamp"},
-    {"name": "clob", "java": "大字符串", "mysql": "text", "oracle": "clob", "postgresql": "text"},
-    {"name": "blob", "java": "二进制大对象", "mysql": "blob", "oracle": "blob", "postgresql": "bytea"},
-    {"name": "schema", "java": "Schema字符串", "mysql": "varchar", "oracle": "varchar2", "postgresql": "varchar"},
-    {"name": "byte", "java": "字节", "mysql": "", "oracle": "", "postgresql": ""},
-    {"name": "expr", "java": "表达式字符串", "mysql": "", "oracle": "", "postgresql": ""},
-    {"name": "cursor", "java": "ResultSet游标", "mysql": "", "oracle": "", "postgresql": ""},
-    {"name": "resultSet", "java": "ResultSet游标", "mysql": "", "oracle": "", "postgresql": ""},
-    {"name": "map", "java": "Map", "mysql": "", "oracle": "", "postgresql": ""},
-    {"name": "object", "java": "Object", "mysql": "", "oracle": "", "postgresql": ""},
-    {"name": "class", "java": "Java Class", "mysql": "", "oracle": "", "postgresql": ""},
-]
-
 
 def _like_clause(query: str, dimension: str) -> Tuple[str, List[Any]]:
     columns = LIKE_COLUMNS.get(dimension)
@@ -170,20 +137,12 @@ def search_group(conn: sqlite3.Connection, group: str, query: str = "", dimensio
                  page: int = 1, page_size: int = PAGE_SIZE,
                  kinds: Optional[List[str]] = None, root_kind: str = "") -> Dict[str, Any]:
     """Search (or browse when query is empty) one workbench page group."""
-    if group not in KIND_GROUPS and group not in {"top", "basetype"}:
+    if group not in KIND_GROUPS and group != "top":
         raise ValueError(f"unknown query group: {group}")
     if dimension and dimension not in LIKE_COLUMNS:
         raise ValueError(f"unknown search dimension: {dimension}")
     page_size = max(1, min(int(page_size), MAX_PAGE_SIZE))
     page = max(1, int(page))
-
-    if group == "basetype":
-        needle = query.casefold()
-        items = [entry for entry in BASIC_TYPES
-                 if not needle or needle in entry["name"].casefold()
-                 or needle in entry["java"].casefold()]
-        return {"group": group, "query": query, "total": len(items), "page": 1,
-                "page_size": max(len(items), 1), "results": items}
 
     offset = (page - 1) * page_size
     selected = _group_kinds(group, kinds) if group in KIND_GROUPS else []
@@ -664,8 +623,6 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
             self._send_json(self._api_children(params))
         elif path == "/api/ddl":
             self._send_json(self._api_ddl(params))
-        elif path == "/api/basetypes":
-            self._send_json({"group": "basetype", "results": BASIC_TYPES})
         elif path == "/api/top-groups":
             conn = connect(self.db_path, read_only=True)
             try:

@@ -14,7 +14,7 @@ const PAGES = [
   { id: "enum", label: "枚举类型", group: "enum", enumMaster: true },
   { id: "error_code", label: "错误码", group: "error_code" },
   { id: "error_item", label: "错误码数据项", group: "error_item" },
-  { id: "basetype", label: "基础类型", group: "basetype" },
+  { id: "base_type", label: "基础类型", group: "base_type" },
 ];
 
 const BATCH_KINDS = ["BATCH_TRANSACTION", "FILE_BATCH_TRANSACTION", "BATCH_STEP", "BATCH_GROUP"];
@@ -111,11 +111,6 @@ function renderResults(payload) {
   const meta = $("#results-meta");
   const body = $("#results-body");
   const groupLabel = PAGES.find((p) => p.group === state.group).label;
-  if (state.group === "basetype") {
-    renderBasetypes(payload.results);
-    meta.textContent = "基础类型（APS SimpleType 内置清单）";
-    updatePager(); return;
-  }
   meta.textContent = `${groupLabel}：共 ${payload.total} 条` +
     (state.query ? `，匹配 “${state.query}”` : "，浏览全部");
   if (!payload.results.length) {
@@ -131,16 +126,6 @@ function renderResults(payload) {
 function displayName(item) {
   const id = item.full_id || item.raw_id || item.stable_id;
   return item.chinese_name ? `${id}：${item.chinese_name}` : id;
-}
-
-function renderBasetypes(items) {
-  const rows = items.map((item) => `<tr>
-    <td><strong>${esc(item.name)}</strong></td><td>${esc(item.java)}</td>
-    <td>${esc(item.mysql || "—")}</td><td>${esc(item.oracle || "—")}</td>
-    <td>${esc(item.postgresql || "—")}</td></tr>`).join("");
-  $("#results-body").innerHTML = `<table class="result-table">
-    <thead><tr><th>基础类型</th><th>Java 语义</th><th>MySQL</th><th>Oracle</th><th>PostgreSQL</th></tr></thead>
-    <tbody>${rows}</tbody></table>`;
 }
 
 function renderTableResults(items) {

@@ -100,6 +100,31 @@ FIXTURE_FILES = {
 <batchStepGroup id="demoStep" longname="演示批量步骤" package="demo.batch"/>
 """,
     # 真实工程 .error.xml 为 errorConf 根，errors 分组下挂 error 明细
+    "batchfile/apdemor.file_batch_tran.xml": """<?xml version="1.0"?>
+<file_batch_transaction id="apdemor" longname="文件读批批量测试" kind="read">
+  <fileTemplate id="apdemor" longname="文件来盘测试">
+    <body id="Body" longname="文件体">
+      <field id="name" type="Base.U_NAME" ref="DemoDict.CustomerInfo.name"/>
+    </body>
+  </fileTemplate>
+</file_batch_transaction>
+""",
+    "namedsql/StPrc.nsql.xml": """<?xml version="1.0"?>
+<sqls id="StPrc" longname="结算相关SQL">
+  <update id="upd_demo" method="update" longname="更新演示">
+    <parameterMap class="java.util.Map">
+      <parameter id="org_num" type="Base.U_NAME" property="org_num" longname="机构号"/>
+    </parameterMap>
+  </update>
+</sqls>
+""",
+    "sharding/aplt.sharding.xml": """<?xml version="1.0"?>
+<ShardingStrategy id="aplt" displayName="平台分表实现">
+  <strategies>
+    <strategy id="ApltStrategy" name="默认分片策略" clazzImpl="demo.ApltShardingStrategy"/>
+  </strategies>
+</ShardingStrategy>
+""",
     "const/CfConst.constant.xml": """<?xml version="1.0"?>
 <constantConf id="CfConst" longname="客户副本常量定义">
   <constants id="Busi" longname="业务种类名称">
@@ -220,6 +245,28 @@ class WorkbenchQueryTest(WorkbenchTestBase):
         self.assertEqual("CfConst.Busi.CONST_CUST_BTCH", consts["results"][0]["full_id"])
         self.assertEqual("CONSTANT", consts["results"][0]["kind"])
         self.assertEqual(1, search_group(self.conn, "constant", query="CFTEMP", dimension="desc")["total"])
+
+        # 文件批量 / 命名SQL / 分片 页
+        fbt = search_group(self.conn, "file_batch", query="apdemor", dimension="id")
+        self.assertEqual(1, fbt["total"])
+        self.assertEqual("FILE_BATCH_TRANSACTION", fbt["results"][0]["kind"])
+        fbt_detail = node_detail(self.conn, fbt["results"][0]["stable_id"])["detail"]
+        self.assertEqual(["name"], [f["raw_id"] for f in fbt_detail["input"]])
+
+        nsql = search_group(self.conn, "nsql", query="StPrc", dimension="id")
+        self.assertEqual(1, nsql["total"])
+        self.assertEqual("StPrc", nsql["results"][0]["full_id"])
+        self.assertEqual("SQL_GROUP", nsql["results"][0]["kind"])
+        nsql_detail = node_detail(self.conn, nsql["results"][0]["stable_id"])["detail"]
+        self.assertEqual(["upd_demo"], [s["raw_id"] for s in nsql_detail["statements"]])
+        stmt_detail = node_detail(self.conn, nsql_detail["statements"][0]["stable_id"])["detail"]
+        self.assertEqual(["org_num"], [p["raw_id"] for p in stmt_detail["parameters"]])
+
+        sharding = search_group(self.conn, "sharding", query="aplt", dimension="id")
+        self.assertEqual(1, sharding["total"])
+        self.assertEqual("SHARDINGSTRATEGY", sharding["results"][0]["kind"])
+        sh_detail = node_detail(self.conn, sharding["results"][0]["stable_id"])["detail"]
+        self.assertEqual(["ApltStrategy"], [s["raw_id"] for s in sh_detail["strategies"]])
 
         # fullid 维度按 "." 分段层级匹配：省略中间分组段仍可定位
         hierarchical = search_group(self.conn, "error_item",
@@ -456,6 +503,14 @@ class WorkbenchHttpTest(WorkbenchTestBase):
         self.assertEqual(400, status)
         status, body = self._get(f"/api/ddl?id={urllib.request.quote('DemoSvc.openAccount')}&dialect=mysql")
         self.assertEqual(400, status)  # 仅表节点支持 DDL 预览
+
+        status, body = self._get("/api/dashboard")
+        self.assertEqual(200, status)
+        dash = json.loads(body)
+        self.assertGreater(dash["db_size"], 0)
+        self.assertIn("nodes", dash["stats"])
+        self.assertEqual(3, dash["counts"]["table"])  # audit / base_cols / demo_user
+        self.assertIn("enum", dash["counts"])
 
         status, _ = self._get("/api/unknown")
         self.assertEqual(404, status)

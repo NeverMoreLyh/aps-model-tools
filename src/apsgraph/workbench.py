@@ -42,6 +42,12 @@ KIND_GROUPS: Dict[str, Dict[str, Any]] = {
     "error_item": {"kinds": {"ERROR"}, "suffix": ".error.xml"},
     # 基础类型：.u_schema.xml 中定义的 restrictionType（如 ApBaseType.U_ADDR）
     "base_type": {"kinds": {"RESTRICTION_TYPE"}, "suffix": ".u_schema.xml"},
+    # 文件批量：file_batch_transaction 根（结构同批量交易：文件模板字段 + 输入）
+    "file_batch": {"kinds": {"FILE_BATCH_TRANSACTION"}, "suffix": ".file_batch_tran.xml"},
+    # 命名SQL：sqls 根，语句为 select/update/... 等 NAMED_SQL 节点
+    "nsql": {"kinds": {"SQL_GROUP"}, "suffix": ".nsql.xml"},
+    # 分片：ShardingStrategy 根，策略为 strategy 节点
+    "sharding": {"kinds": {"SHARDINGSTRATEGY"}, "suffix": ".sharding.xml"},
     # 常量数据项：.constant.xml 中 constantConf>constants>constant（message/description）
     "constant": {"kinds": {"CONSTANT"}, "suffix": ".constant.xml"},
     "complex_type": {"kinds": {"COMPLEX_TYPE"}},
@@ -266,6 +272,27 @@ def _resolve_node_row(conn: sqlite3.Connection, node_ref: str) -> sqlite3.Row:
     return row
 
 
+DASHBOARD_GROUPS = [
+    "top", "table", "service", "service_operation", "transaction", "batch",
+    "file_batch", "nsql", "sharding", "complex_type", "dictionary",
+    "dict_element", "base_type", "error_code", "error_item", "constant",
+]
+
+
+def dashboard(conn: sqlite3.Connection, db_path: Path) -> Dict[str, Any]:
+    """Overview numbers: index stats, sqlite file size, per-page record counts."""
+    counts = {}
+    for group in DASHBOARD_GROUPS:
+        counts[group] = search_group(conn, group, page=1, page_size=1)["total"]
+    # 枚举类型页按枚举（ENUM_VALUE 的 owner）计数
+    counts["enum"] = enum_groups(conn, page=1, page_size=1)["total"]
+    return {
+        "stats": get_stats(conn),
+        "db_size": Path(db_path).stat().st_size,
+        "counts": counts,
+    }
+
+
 def child_nodes(conn: sqlite3.Connection, stable_id: str) -> List[Dict[str, Any]]:
     """Direct children of a node, for the lazy-loaded containment tree."""
     row = conn.execute("select id from nodes where stable_id=?", (stable_id,)).fetchone()
@@ -488,8 +515,14 @@ def _detail_for_kind(conn: sqlite3.Connection, kind: str, node_id: int) -> Dict[
         return _interface_detail(conn, node_id)
     if kind == "TRANSACTION":
         return _transaction_detail(conn, node_id)
-    if kind == "BATCH_TRANSACTION":
+    if kind in {"BATCH_TRANSACTION", "FILE_BATCH_TRANSACTION"}:
         return _batch_detail(conn, node_id)
+    if kind == "SQL_GROUP":
+        return {"statements": _descendants_of_kind(conn, node_id, "NAMED_SQL")}
+    if kind == "NAMED_SQL":
+        return {"parameters": _descendants_of_kind(conn, node_id, "SQL_PARAMETER")}
+    if kind == "SHARDINGSTRATEGY":
+        return {"strategies": _descendants_of_kind(conn, node_id, "STRATEGY")}
     if kind == "ERRORCONF":
         return _error_code_detail(conn, node_id)
     if kind == "ERROR":
@@ -633,6 +666,12 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
                 conn.close()
         elif path == "/api/search":
             self._send_json(self._api_search(params))
+        elif path == "/api/dashboard":
+            conn = connect(self.db_path, read_only=True)
+            try:
+                self._send_json(dashboard(conn, self.db_path))
+            finally:
+                conn.close()
         elif path == "/api/enums":
             conn = connect(self.db_path, read_only=True)
             try:

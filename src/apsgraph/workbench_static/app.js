@@ -2,6 +2,7 @@
 "use strict";
 
 const PAGES = [
+  { id: "dashboard", label: "总览", group: "dashboard", dashboard: true },
   { id: "top", label: "顶层模型", group: "top" },
   { id: "table", label: "表", group: "table" },
   { id: "service_file", label: "服务文件", group: "service" },
@@ -16,12 +17,15 @@ const PAGES = [
   { id: "error_code", label: "错误码文件", group: "error_code" },
   { id: "error_item", label: "错误码", group: "error_item" },
   { id: "constant", label: "常量", group: "constant" },
+  { id: "file_batch", label: "文件批量", group: "file_batch" },
+  { id: "nsql", label: "命名SQL", group: "nsql" },
+  { id: "sharding", label: "分片", group: "sharding" },
 ];
 
 /* 左侧菜单一二级聚合：一级菜单之外统一归入“其他” */
 const NAV_PRIMARY = ["transaction", "service", "table", "dict_element", "enum", "base_type"];
-const NAV_OTHER = ["top", "service_file", "batch", "complex_type", "dictionary",
-                   "error_code", "error_item", "constant"];
+const NAV_OTHER = ["top", "service_file", "batch", "file_batch", "nsql", "sharding",
+                   "complex_type", "dictionary", "error_code", "error_item", "constant"];
 let navOtherOpen = false;
 
 const BATCH_KINDS = ["BATCH_TRANSACTION", "FILE_BATCH_TRANSACTION", "BATCH_STEP", "BATCH_GROUP"];
@@ -61,6 +65,7 @@ function renderNav() {
     li.addEventListener("click", () => switchPage(page.id));
     return li;
   };
+  list.appendChild(makeItem(PAGES.find((p) => p.id === "dashboard")));
   for (const id of NAV_PRIMARY) list.appendChild(makeItem(PAGES.find((p) => p.id === id)));
   const group = document.createElement("li");
   group.className = "nav-group";
@@ -97,7 +102,70 @@ function switchPage(pageId) {
   detailHistory.stack = [];
   detailHistory.current = null;
   renderNav();
+  $("#content").classList.toggle("dashboard-mode", !!page.dashboard);
+  if (page.dashboard) { renderDashboard(); return; }
   runSearch();
+}
+
+const DASH_CARDS = [
+  { group: "top", label: "顶层模型" },
+  { group: "table", label: "表" },
+  { group: "service", label: "服务文件" },
+  { group: "service_operation", label: "服务" },
+  { group: "transaction", label: "交易" },
+  { group: "batch", label: "批量交易" },
+  { group: "file_batch", label: "文件批量" },
+  { group: "nsql", label: "命名SQL" },
+  { group: "sharding", label: "分片" },
+  { group: "complex_type", label: "复合类型" },
+  { group: "dictionary", label: "数据字典文件" },
+  { group: "dict_element", label: "数据字典" },
+  { group: "base_type", label: "基础类型" },
+  { group: "enum", label: "枚举类型" },
+  { group: "error_code", label: "错误码文件" },
+  { group: "error_item", label: "错误码" },
+  { group: "constant", label: "常量" },
+];
+
+function fmtBytes(size) {
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  if (size < 1024 * 1024 * 1024) return `${(size / 1024 / 1024).toFixed(1)} MB`;
+  return `${(size / 1024 / 1024 / 1024).toFixed(2)} GB`;
+}
+
+async function renderDashboard() {
+  const body = $("#results-body");
+  const meta = $("#results-meta");
+  meta.textContent = "";
+  body.innerHTML = `<div class="empty-tip">加载中…</div>`;
+  try {
+    const payload = await api("/api/dashboard");
+    const stats = payload.stats || {};
+    const counts = payload.counts || {};
+    const statsHtml = [
+      ["SQLite 大小", fmtBytes(payload.db_size || 0)],
+      ["文件", stats.files],
+      ["解析成功", stats.parsed],
+      ["解析失败", stats.parse_failed],
+      ["节点", stats.nodes],
+      ["边", stats.edges],
+      ["未解析引用", stats.unresolved],
+    ].map(([label, value]) =>
+      `<div class="dash-stat${label === "解析失败" && value > 0 ? " dash-warn" : ""}">` +
+      `<span class="dash-num">${esc(value)}</span><span class="dash-label">${esc(label)}</span></div>`).join("");
+    const cards = DASH_CARDS.map((card) => {
+      const page = PAGES.find((p) => p.group === card.group);
+      return `<div class="dash-card" data-page="${page ? page.id : "top"}">
+        <div class="num">${esc(counts[card.group] == null ? "—" : counts[card.group])}</div>
+        <div class="label">${esc(card.label)}</div></div>`;
+    }).join("");
+    body.innerHTML = `<div class="dash-stats">${statsHtml}</div><div class="dash-grid">${cards}</div>`;
+    body.querySelectorAll(".dash-card").forEach((card) =>
+      card.addEventListener("click", () => switchPage(card.dataset.page)));
+  } catch (error) {
+    body.innerHTML = `<div class="error-banner">${esc(error.message)}</div>`;
+  }
 }
 
 /* ---------- 搜索 ---------- */
@@ -501,10 +569,19 @@ function renderDetailSections(data) {
     html += section("输出（output）", fieldsTable(detail.output, IO_COLS));
     const steps = detail.flow_steps || [];
     html += section("流程编排（flow）", `<div class="flow-holder">${steps.length ? "渲染中…" : `<div class="muted">（无）</div>`}</div>`);
-  } else if (node.kind === "BATCH_TRANSACTION") {
+  } else if (node.kind === "BATCH_TRANSACTION" || node.kind === "FILE_BATCH_TRANSACTION") {
     html += section("输入字段", fieldsTable(detail.input, IO_COLS));
     if (detail.steps && detail.steps.length) html += section("批量步骤", fieldsTable(detail.steps, ["raw_id", "full_id", "longname"]));
     if (detail.groups && detail.groups.length) html += section("步骤组", fieldsTable(detail.groups, ["raw_id", "full_id", "longname"]));
+  } else if (node.kind === "SQL_GROUP") {
+    if (detail.statements && detail.statements.length)
+      html += section("命名SQL（statements）", fieldsTable(detail.statements, ["raw_id", "method", "longname", "desc"]));
+    else html += section("命名SQL", `<div class="muted">（无）</div>`);
+  } else if (node.kind === "NAMED_SQL") {
+    html += section("参数（parameter）", fieldsTable(detail.parameters, ["id", "property", "type", "javaType", "ref", "mode", "longname"]));
+  } else if (node.kind === "SHARDINGSTRATEGY") {
+    html += section("分片策略（strategies）", detail.strategies && detail.strategies.length
+      ? fieldsTable(detail.strategies, ["id", "name", "clazzImpl"]) : `<div class="muted">（无）</div>`);
   } else if (node.kind === "ERROR") {
     html += section("参数（parameter）", fieldsTable(detail.parameters, ["id", "type", "longname", "ref"]));
   } else if (node.kind === "ERRORCONF") {

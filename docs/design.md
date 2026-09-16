@@ -83,8 +83,9 @@
 
 ### 3.5.1 查询工作台（workbench）
 
-`apsgraph workbench` 用标准库 `http.server.ThreadingHTTPServer` 在 `127.0.0.1` 提供只读查询页面与 JSON API（`/api/search`、`/api/enums`、`/api/node`、`/api/children`、`/api/ddl`、`/api/top-groups`、`/api/stats`）：
+`apsgraph workbench` 用标准库 `http.server.ThreadingHTTPServer` 在 `127.0.0.1` 提供只读查询页面与 JSON API（`/api/search`、`/api/enums`、`/api/node`、`/api/children`、`/api/ddl`、`/api/top-groups`、`/api/dashboard`、`/api/stats`）：
 
+- 总览页 `/api/dashboard` 汇总索引统计（文件/解析状态/节点/边/未解析）、SQLite 文件大小与各页面记录数（复用各分组的空关键字计数），前端以卡片呈现并支持点击跳转；
 - 查询分组由 `KIND_GROUPS` 定义：枚举值（ENUM_VALUE）、数据字典（DICTIONARY，`.d_schema.xml`）、错误码（真实工程 `.error.xml` 为 `errorConf` 根，kind ERRORCONF，详情按 `errors>error` 分组展示 message 明细并支持按 message 搜索）、复合类型、字典数据项（ELEMENT 且父为 DICTIONARY、来源 `.d_schema.xml`，粒度 `BpDict.B.btch_grp_num`；排除复合类型的 element）、表、服务文件（SERVICE_TYPE）、服务（SERVICE_OPERATION，fullId 形如 `ApBatchFileService.smtbat`）、交易、批量交易、文件批量（FILE_BATCH_TRANSACTION，`.file_batch_tran.xml`）、命名SQL（SQL_GROUP，`.nsql.xml`，详情展示 NAMED_SQL 语句列表、NAMED_SQL 详情展示 parameter 子节点）、分片（SHARDINGSTRATEGY，`.sharding.xml`，详情展示 strategy 列表）、基础类型（RESTRICTION_TYPE，来源 `.u_schema.xml`）、常量（CONSTANT，来源 `.constant.xml`）；前端左侧菜单一二级聚合（一级为交易/服务/表/数据字典/枚举类型/基础类型，其余归入可展开的“其他”组，默认收起）；顶层模型页按 `owner_node_id IS NULL` 过滤并可按 kind 再过滤。
 - 模糊搜索为子串匹配（SQL LIKE，`%`/`_` 转义为字面值），维度 `id/fullid/longname/desc` 分别命中 `raw_id`/`full_id` 与 `properties_json` 中的 `longname/name`/`description/desc/remark/message`（desc 维度包含 message 以支持错误码搜索）；fullid 维度在关键字含 `.` 时按分段层级匹配（`GnError.E0001` 命中 `GnError.Genl.E0001`）；空关键字退化为分页浏览。
 - 枚举页为主从布局：`/api/enums` 按 ENUM_VALUE 的 owner（restrictionType 等）聚合出枚举列表（含枚举值数量），详情展示全部枚举值。

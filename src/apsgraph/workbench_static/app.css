@@ -47,6 +47,19 @@ body { font: 14px/1.5 -apple-system, "PingFang SC", "Microsoft YaHei", sans-seri
 
 #content { flex: 1; display: flex; min-height: 0; }
 #results-pane { width: 25%; min-width: 220px; flex: none; display: flex; flex-direction: column; overflow: hidden; }
+#content.dashboard-mode #results-pane { width: 100%; }
+#content.dashboard-mode #detail-pane, #content.dashboard-mode #pane-resizer { display: none; }
+.dash-stats { display: flex; flex-wrap: wrap; gap: 10px; padding: 12px; }
+.dash-stat { background: #eef1f4; border-radius: 8px; padding: 8px 16px; display: flex; flex-direction: column; align-items: center; min-width: 96px; }
+.dash-stat .dash-num { font-size: 20px; font-weight: 700; }
+.dash-stat .dash-label { font-size: 12px; color: var(--muted); }
+.dash-stat.dash-warn { background: #ffebe9; }
+.dash-stat.dash-warn .dash-num { color: #cf222e; }
+.dash-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; padding: 0 12px 12px; }
+.dash-card { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 14px 10px; cursor: pointer; text-align: center; }
+.dash-card:hover { border-color: var(--accent); background: var(--accent-soft); }
+.dash-card .num { font-size: 24px; font-weight: 700; color: var(--accent); }
+.dash-card .label { font-size: 13px; margin-top: 4px; }
 #pane-resizer { width: 6px; flex: none; cursor: col-resize; background: transparent; }
 #pane-resizer:hover { background: var(--border); }
 body.resizing { cursor: col-resize; user-select: none; }

@@ -283,9 +283,24 @@ def _named_sql_texts(conn: sqlite3.Connection, node: Dict[str, Any],
     tag, raw_id = node.get("xml_tag"), node.get("raw_id")
     for element in root.iter():
         if (_local_tag(element.tag) == tag and element.attrib.get("id") == raw_id):
-            return [{"type": str(child.attrib.get("type") or "NONE"),
-                     "text": (child.text or "").strip()}
-                    for child in element if _local_tag(child.tag) == "sql"]
+            # 静态语句：多个 <sql type="..."> 子元素按数据库类型区分；
+            # 动态语句（dynamicSelect/dynamicSql）：SQL 原文本是元素自身的 CDATA。
+            sql_children = [child for child in element if _local_tag(child.tag) == "sql"]
+            if sql_children:
+                return [{"type": str(child.attrib.get("type") or "NONE"),
+                         "text": (child.text or "").strip()}
+                        for child in sql_children]
+            dyn_children = [child for child in element if _local_tag(child.tag) == "dynamicSql"]
+            if dyn_children:
+                # 动态SQL：每个 <dynamicSql type="..."> 一个方言，其内 <str> 片段按序拼接
+                result = []
+                for dyn in dyn_children:
+                    parts = [(s.text or "").strip() for s in dyn if _local_tag(s.tag) == "str"]
+                    result.append({"type": str(dyn.attrib.get("type") or "NONE"),
+                                   "text": "\n".join(part for part in parts if part)})
+                return result
+            own_text = (element.text or "").strip()
+            return [{"type": "NONE", "text": own_text}] if own_text else []
     return []
 
 

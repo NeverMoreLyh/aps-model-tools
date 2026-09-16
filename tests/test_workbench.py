@@ -118,6 +118,14 @@ FIXTURE_FILES = {
     <sql>UPDATE kstb_demo SET org_num = #org_num#</sql>
     <sql type="oracle">UPDATE kstb_demo SET org_num = #org_num#</sql>
   </update>
+  <dynamicSelect id="dyn_demo" method="selectPage" longname="动态查询演示">
+    <dynamicSql type="mysql">
+      <str test="org_num!=null"><![CDATA[select * from kstb_demo_mysql]]></str>
+    </dynamicSql>
+    <dynamicSql>
+      <str test="org_num!=null"><![CDATA[select * from kstb_demo where org_num = #org_num#]]></str>
+    </dynamicSql>
+  </dynamicSelect>
 </sqls>
 """,
     "sharding/aplt.sharding.xml": """<?xml version="1.0"?>
@@ -270,7 +278,7 @@ class WorkbenchQueryTest(WorkbenchTestBase):
                                   source_root=self.root)["detail"]
         self.assertEqual(["NONE", "oracle"], [s["type"] for s in item_detail["sqls"]])
         nsql_detail = node_detail(self.conn, nsql["results"][0]["stable_id"])["detail"]
-        self.assertEqual(["upd_demo"], [s["raw_id"] for s in nsql_detail["statements"]])
+        self.assertEqual(["upd_demo", "dyn_demo"], [s["raw_id"] for s in nsql_detail["statements"]])
         stmt_detail = node_detail(self.conn, nsql_detail["statements"][0]["stable_id"])["detail"]
         self.assertEqual(["org_num"], [p["raw_id"] for p in stmt_detail["parameters"]])
         # SQL 文本从源文件按需解析，按数据库类型展示且 NONE 默认置顶
@@ -278,6 +286,15 @@ class WorkbenchQueryTest(WorkbenchTestBase):
                            source_root=self.root)["detail"]["sqls"]
         self.assertEqual(["NONE", "oracle"], [item["type"] for item in sqls])
         self.assertIn("UPDATE kstb_demo", sqls[0]["text"])
+
+        # 动态SQL：按元素自身 CDATA 原文本展示（NONE）
+        dyn = search_group(self.conn, "nsql_item", query="dyn_demo", dimension="id")
+        self.assertEqual(1, dyn["total"])
+        dyn_sqls = node_detail(self.conn, dyn["results"][0]["stable_id"],
+                               source_root=self.root)["detail"]["sqls"]
+        self.assertEqual(["mysql", "NONE"], [s["type"] for s in dyn_sqls])
+        self.assertIn("kstb_demo_mysql", dyn_sqls[0]["text"])
+        self.assertIn("select * from kstb_demo where", dyn_sqls[1]["text"])
         self.assertEqual([], node_detail(self.conn, nsql_detail["statements"][0]["stable_id"])["detail"]["sqls"])
 
         sharding = search_group(self.conn, "sharding", query="aplt", dimension="id")

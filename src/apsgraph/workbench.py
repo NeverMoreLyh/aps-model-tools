@@ -324,6 +324,30 @@ def _fields_under(conn: sqlite3.Connection, node_id: int, container_tag: str) ->
     return [_row_to_dict(row) for row in rows]
 
 
+def _table_extensions(conn: sqlite3.Connection, node_id: int) -> List[Dict[str, Any]]:
+    """Common-field tables referenced via EXTENDS, in document order.
+
+    A table may extend several common tables; each entry carries the target
+    identity and its own fields so the UI can render them sequentially.
+    """
+    rows = conn.execute(
+        """select e.raw_target, t.id as tid, t.stable_id, t.full_id
+        from edges e left join nodes t on t.id=e.to_node_id
+        where e.from_node_id=? and e.relation_kind='EXTENDS' order by e.id""",
+        (node_id,)).fetchall()
+    extensions: List[Dict[str, Any]] = []
+    for row in rows:
+        resolved = row["tid"] is not None
+        extensions.append({
+            "raw_target": row["raw_target"],
+            "full_id": row["full_id"] if resolved else row["raw_target"],
+            "stable_id": row["stable_id"] if resolved else None,
+            "resolved": resolved,
+            "fields": _descendants_of_kind(conn, row["tid"], "FIELD") if resolved else [],
+        })
+    return extensions
+
+
 def _table_detail(conn: sqlite3.Connection, node_id: int) -> Dict[str, Any]:
     # Real tables carry both index flavors as kind INDEX; distinguish them by
     # their parent container (<indexes> vs <odbindexes>), not by tag.
@@ -334,6 +358,7 @@ def _table_detail(conn: sqlite3.Connection, node_id: int) -> Dict[str, Any]:
                if node["id"] not in odb_ids]
     return {
         "fields": _descendants_of_kind(conn, node_id, "FIELD"),
+        "extensions": _table_extensions(conn, node_id),
         "indexes": indexes,
         "odbindexes": odbindexes,
         "sequences": _descendants_of_kind(conn, node_id, "SEQUENCE"),

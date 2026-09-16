@@ -1,6 +1,6 @@
 # APSGraph 设计文档
 
-> 版本：0.27.0
+> 版本：0.27.1
 > 更新时间：2026-09-16  
 > 文档定位：说明 APSGraph 的关键架构、模块设计、数据模型、算法、并发模型、性能设计和安全边界。
 
@@ -88,7 +88,7 @@
 - 查询分组由 `KIND_GROUPS` 定义：枚举值（ENUM_VALUE）、数据字典（DICTIONARY，`.d_schema.xml`）、错误码（真实工程 `.error.xml` 为 `errorConf` 根，kind ERRORCONF，详情按 `errors>error` 分组展示 message 明细并支持按 message 搜索）、复合类型、字典数据项（ELEMENT 且父为 DICTIONARY、来源 `.d_schema.xml`，粒度 `BpDict.B.btch_grp_num`；排除复合类型的 element）、表、服务文件（SERVICE_TYPE）、服务（SERVICE_OPERATION，fullId 形如 `ApBatchFileService.smtbat`）、交易、批量交易、基础类型（RESTRICTION_TYPE，来源 `.u_schema.xml`）；顶层模型页按 `owner_node_id IS NULL` 过滤并可按 kind 再过滤。
 - 模糊搜索为子串匹配（SQL LIKE，`%`/`_` 转义为字面值），维度 `id/fullid/longname/desc` 分别命中 `raw_id`/`full_id` 与 `properties_json` 中的 `longname/name`/`description/desc/remark/message`（desc 维度包含 message 以支持错误码搜索）；fullid 维度在关键字含 `.` 时按分段层级匹配（`GnError.E0001` 命中 `GnError.Genl.E0001`）；空关键字退化为分页浏览。
 - 枚举页为主从布局：`/api/enums` 按 ENUM_VALUE 的 owner（restrictionType 等）聚合出枚举列表（含枚举值数量），详情展示全部枚举值。
-- 详情装配用递归 CTE 沿 `owner_node_id` 收集子结构：表的字段/索引/ODB 索引/序列，服务操作的输入输出（`input`/`output` 容器为无 id 穿透节点，需在子树中定位），交易的输入输出与 flow 编排树——真实 FlowTran 的 flow 混合 `method` 直调步骤与 `case>when>service` 分支（when 带 `test` 表达式），服务端递归构建 flow 树、前端用 mermaid 渲染纵向流程图（TB 方向，所有步骤与分支按执行顺序垂直串联，when 条件标注在分支边上，渲染失败时降级为缩进列表），`serviceName`/`transactionId` 以 full_id/raw_id 兜底解析为可跳转目标；错误码按 `errors` 分组展示 `error` 明细（表头 `id,类型,错误码,参数,message`，`参数` 为该错误的 parameter 子节点 id 列表）；另有错误码数据项分组（kind ERROR，详情展示 parameter 子节点）。
+- 详情装配用递归 CTE 沿 `owner_node_id` 收集子结构：表的字段/公共字段表（EXTENDS 引用按序展开各公共表字段）/索引/ODB 索引/序列，服务操作的输入输出（`input`/`output` 容器为无 id 穿透节点，需在子树中定位），交易的输入输出与 flow 编排树——真实 FlowTran 的 flow 混合 `method` 直调步骤与 `case>when>service` 分支（when 带 `test` 表达式），服务端递归构建 flow 树、前端用 mermaid 渲染纵向流程图（TB 方向，所有步骤与分支按执行顺序垂直串联，when 条件标注在分支边上，渲染失败时降级为缩进列表），`serviceName`/`transactionId` 以 full_id/raw_id 兜底解析为可跳转目标；错误码按 `errors` 分组展示 `error` 明细（表头 `id,类型,错误码,参数,message`，`参数` 为该错误的 parameter 子节点 id 列表）；另有错误码数据项分组（kind ERROR，详情展示 parameter 子节点）。
 - 前端为 `workbench_static/` 下的单页应用（vanilla HTML/JS/CSS），随 wheel 以 package-data 分发；mermaid 流程图库（mermaid@10.9.1 minified）同样打包进 `workbench_static/`，离线可用，加载失败时 flow 自动降级为缩进列表；流程图画布默认 0.6 缩放，提供工具栏（放大/缩小/重置/全屏）、滚轮缩放与拖拽平移（CSS transform 实现，pointer capture 拖拽），全屏为 fixed 弹层并提供“✕ 关闭全屏”按钮；左侧菜单可收起，结果列表默认 1/4 宽并由分隔条拖拽调节；结果分页（每页 50）、子孙树懒加载；结果列表只展示 `fullId/id：中文名`，详情属性过滤带命名空间的 XML 属性（如 `xsi:noNamespaceSchemaLocation`）。`/api/ddl` 复用 `ddlgen.generate_all_ddl` 对单个 TABLE 节点生成 MySQL/Oracle/PostgreSQL 建表语句（只生成、不执行，与 `ddl-gen` 同一实现），并用 `validate_ddl_sql` 以 sqlglot 按对应方言解析校验（可选依赖，惰性导入，未安装时返回跳过而非失败），前端在表详情提供弹窗、校验结论展示与一键复制；搜索栏位于中栏顶部，直接过滤中间结果列表；详情表格列按元数据模型对象定义（输入输出/数据项为 `字典ID,字段,中文名,类型,必填,多值,默认值,固定值,描述,别名`，表字段为 `字典ID,字段,DbName,中文名,类型,可为空,默认值,描述,是否主键`；数据项行的 `字典ID` 在 ref 缺省时回退为节点自身 full_id），值符合模型 fullId 形态（正则 `^[A-Z]\w*(\.\w+)+$`，排除 Java 包名等小写开头值）的属性一律渲染为节点跳转链接（复用 `/api/node` 的 full_id/raw_id 兜底解析）；详情面板维护跳转历史栈并提供返回上一级按钮，页面切换时清空。
 
 ### 3.6 原始 XML 与语义节点索引

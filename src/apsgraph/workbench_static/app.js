@@ -434,6 +434,12 @@ function renderDetailSections(data) {
   if (node.kind === "TABLE") {
     html += `<button id="btn-gen-ddl" class="action-btn">生成 DDL</button>`;
     html += section("字段（fields）", fieldsTable(detail.fields, TABLE_COLS));
+    for (const ext of detail.extensions || []) {
+      const title = ext.resolved
+        ? `公共字段表：<a class="node-link" data-id="${esc(ext.stable_id)}">${esc(ext.full_id)}</a>`
+        : `公共字段表：<span class="unresolved">未解析：${esc(ext.raw_target || "")}</span>`;
+      html += section(title, ext.resolved ? fieldsTable(ext.fields, TABLE_COLS) : `<div class="muted">（目标不可达，无法展示字段）</div>`);
+    }
     html += section("物理索引（indexes）", detail.indexes && detail.indexes.length
       ? fieldsTable(detail.indexes, ["id", "type", "fields"]) : `<div class="muted">（无）</div>`);
     html += section("ODB 索引（odbindexes）", detail.odbindexes && detail.odbindexes.length

@@ -40,7 +40,13 @@ FIXTURE_FILES = {
 """,
     "tables/Demo.tables.xml": """<?xml version="1.0"?>
 <schema id="DemoTables" package="demo.tables">
-  <table id="demo_user" name="demo_user" longname="用户表">
+  <table id="audit" name="audit" longname="公共审计字段">
+    <fields><field id="created_at" type="string" nullable="false"/></fields>
+  </table>
+  <table id="base_cols" name="base_cols" longname="公共基础字段">
+    <fields><field id="org_id" type="string"/></fields>
+  </table>
+  <table id="demo_user" name="demo_user" longname="用户表" extension=" DemoTables.audit DemoTables.base_cols ">
     <fields>
       <field id="id" type="Base.U_NAME" primarykey="true" nullable="false"/>
       <field id="status" type="Base.U_STATUS" ref="DemoDict.CustomerInfo.name"/>
@@ -209,7 +215,7 @@ class WorkbenchQueryTest(WorkbenchTestBase):
 
     def test_browse_mode_and_pagination(self):
         page1 = search_group(self.conn, "table", page=1, page_size=1)
-        self.assertEqual(1, page1["total"])
+        self.assertEqual(3, page1["total"])  # audit / base_cols / demo_user
         self.assertEqual(1, len(page1["results"]))
         self.assertEqual("TABLE", page1["results"][0]["kind"])
 
@@ -242,6 +248,13 @@ class WorkbenchQueryTest(WorkbenchTestBase):
         structured = detail["detail"]
         field_ids = {field["raw_id"] for field in structured["fields"]}
         self.assertEqual({"id", "status"}, field_ids)
+        # 公共字段表按 extension 引用顺序展示，且携带其自身字段
+        extensions = structured["extensions"]
+        self.assertEqual(["DemoTables.audit", "DemoTables.base_cols"],
+                         [item["full_id"] for item in extensions])
+        self.assertTrue(all(item["resolved"] for item in extensions))
+        self.assertEqual(["created_at"], [f["raw_id"] for f in extensions[0]["fields"]])
+        self.assertEqual(["org_id"], [f["raw_id"] for f in extensions[1]["fields"]])
         self.assertEqual(["idx_status"], [idx["raw_id"] for idx in structured["indexes"]])
         self.assertEqual(["odb_id"], [idx["raw_id"] for idx in structured["odbindexes"]])
         self.assertEqual(["seq_demo"], [seq["raw_id"] for seq in structured["sequences"]])
@@ -312,9 +325,9 @@ class WorkbenchQueryTest(WorkbenchTestBase):
         schemas = search_group(self.conn, "top", root_kind="SCHEMA")
         demo_tables = next(item for item in schemas["results"] if item["full_id"] == "DemoTables")
         children = child_nodes(self.conn, demo_tables["stable_id"])
-        self.assertEqual(1, len(children))
-        self.assertEqual("DemoTables.demo_user", children[0]["full_id"])
-        self.assertTrue(children[0]["has_children"])
+        self.assertEqual(3, len(children))
+        demo_user = next(item for item in children if item["full_id"] == "DemoTables.demo_user")
+        self.assertTrue(demo_user["has_children"])
 
     def test_base_type_group_queries_u_schema(self):
         catalog = search_group(self.conn, "base_type", query="U_STATUS", dimension="id")
@@ -407,7 +420,8 @@ class WorkbenchHttpTest(WorkbenchTestBase):
         status, body = self._get("/api/children?id=DemoTables")
         self.assertEqual(200, status)
         children = json.loads(body)["children"]
-        self.assertEqual(["DemoTables.demo_user"], [item["full_id"] for item in children])
+        self.assertEqual(["DemoTables.audit", "DemoTables.base_cols", "DemoTables.demo_user"],
+                         [item["full_id"] for item in children])
 
         # DDL 预览：只生成不执行，支持三种方言
         status, body = self._get("/api/search?group=table&q=demo_user&field=id")

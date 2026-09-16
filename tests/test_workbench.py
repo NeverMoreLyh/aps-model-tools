@@ -98,7 +98,9 @@ FIXTURE_FILES = {
     "err/MdError.error.xml": """<?xml version="1.0"?>
 <errorConf id="MdError" longname="介质错误码定义">
   <errors id="Cuce" longname="客户凭证错误信息">
-    <error id="E0002" type="error" message="凭证种类不存在"/>
+    <error id="E0002" type="error" message="凭证种类不存在">
+      <parameter id="vchr_catg" type="Base.U_NAME" longname="凭证种类"/>
+    </error>
     <error id="E0003" type="error" message="密码错误次数已超限"/>
   </errors>
 </errorConf>
@@ -193,6 +195,19 @@ class WorkbenchQueryTest(WorkbenchTestBase):
         by_message = search_group(self.conn, "error_code", query="密码错误", dimension="desc")
         self.assertEqual(1, by_message["total"])
 
+        # 错误码数据项页：按 GnError.GnError.E0001 这类 full_id 粒度查询 ERROR 节点
+        items = search_group(self.conn, "error_item", query="E0002", dimension="id")
+        self.assertEqual(1, items["total"])
+        self.assertEqual("MdError.MdError.Cuce.E0002", items["results"][0]["full_id"])
+        self.assertEqual("ERROR", items["results"][0]["kind"])
+        self.assertEqual(1, search_group(self.conn, "error_item", query="不存在", dimension="desc")["total"])
+
+        # fullid 维度按 "." 分段层级匹配：省略中间分组段仍可定位
+        hierarchical = search_group(self.conn, "error_item",
+                                    query="MdError.MdError.E0002", dimension="fullid")
+        self.assertEqual(1, hierarchical["total"])
+        self.assertEqual("MdError.MdError.Cuce.E0002", hierarchical["results"][0]["full_id"])
+
     def test_browse_mode_and_pagination(self):
         page1 = search_group(self.conn, "table", page=1, page_size=1)
         self.assertEqual(1, page1["total"])
@@ -275,6 +290,7 @@ class WorkbenchQueryTest(WorkbenchTestBase):
         self.assertEqual("Cuce", group["node"]["raw_id"])
         self.assertEqual(["E0002", "E0003"], [item["raw_id"] for item in group["errors"]])
         self.assertEqual("凭证种类不存在", group["errors"][0]["properties"]["message"])
+        self.assertEqual("vchr_catg", group["errors"][0]["parameters"])
 
         dicts = search_group(self.conn, "dictionary")
         dict_detail = node_detail(self.conn, dicts["results"][0]["stable_id"])["detail"]
@@ -373,6 +389,12 @@ class WorkbenchHttpTest(WorkbenchTestBase):
         self.assertEqual("ERRORCONF", detail["node"]["kind"])
         self.assertEqual(["E0002", "E0003"],
                          [item["raw_id"] for item in detail["detail"]["groups"][0]["errors"]])
+
+        status, body = self._get("/api/node?id=" + urllib.request.quote("MdError.MdError.Cuce.E0002"))
+        self.assertEqual(200, status)
+        error_detail = json.loads(body)
+        self.assertEqual("ERROR", error_detail["node"]["kind"])
+        self.assertEqual(["vchr_catg"], [item["raw_id"] for item in error_detail["detail"]["parameters"]])
 
         status, body = self._get("/api/node?id=DemoSvc.openAccount")
         self.assertEqual(200, status)

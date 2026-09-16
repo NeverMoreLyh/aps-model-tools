@@ -13,6 +13,7 @@ const PAGES = [
   { id: "dictionary", label: "数据字典", group: "dictionary" },
   { id: "enum", label: "枚举类型", group: "enum", enumMaster: true },
   { id: "error_code", label: "错误码", group: "error_code" },
+  { id: "error_item", label: "错误码数据项", group: "error_item" },
   { id: "basetype", label: "基础类型", group: "basetype" },
 ];
 
@@ -238,6 +239,13 @@ const IO_COLS = [
   { label: "描述", keys: DESC_KEYS },
   { label: "别名", keys: ["alias"] },
 ];
+const ERROR_COLS = [
+  { label: "id", keys: ["id"] },
+  { label: "类型", keys: ["type"] },
+  { label: "错误码", keys: ["full_id"], link: true },
+  { label: "参数", keys: ["parameters"] },
+  { label: "message", keys: ["message"] },
+];
 const TABLE_COLS = [
   { label: "字典ID", keys: ["ref"], link: true },
   { label: "字段", keys: ["id"] },
@@ -263,7 +271,7 @@ function fieldsTable(rows, columns) {
   const head = cols.map((col) => `<th>${esc(col.label)}</th>`).join("");
   const body = rows.map((row) => {
     // 数据项/字段行允许“字典ID”在 ref 缺省时回退为节点自身的 full_id（如 BpDict.A.addr）
-    const props = Object.assign({}, row.properties || {}, row.full_id ? { full_id: row.full_id } : {});
+    const props = Object.assign({}, row, row.properties || {}, { full_id: row.full_id });
     return "<tr>" + cols.map((col) => {
       let value = "";
       for (const key of col.keys) {
@@ -467,10 +475,12 @@ function renderDetailSections(data) {
     html += section("输入字段", fieldsTable(detail.input, IO_COLS));
     if (detail.steps && detail.steps.length) html += section("批量步骤", fieldsTable(detail.steps, ["raw_id", "full_id", "longname"]));
     if (detail.groups && detail.groups.length) html += section("步骤组", fieldsTable(detail.groups, ["raw_id", "full_id", "longname"]));
+  } else if (node.kind === "ERROR") {
+    html += section("参数（parameter）", fieldsTable(detail.parameters, ["id", "type", "longname", "ref"]));
   } else if (node.kind === "ERRORCONF") {
     for (const group of detail.groups || []) {
       const title = group.node ? `错误分组：${group.node.raw_id} ${group.node.properties && group.node.properties.longname ? "· " + esc(group.node.properties.longname) : ""}` : "错误码";
-      html += section(title, fieldsTable(group.errors, ["raw_id", "type", "message"]));
+      html += section(title, fieldsTable(group.errors, ERROR_COLS));
     }
     if (!detail.groups || !detail.groups.length) html += section("错误码", `<div class="muted">（无）</div>`);
   } else if (node.kind === "DICTIONARY" || node.kind === "COMPLEX_TYPE" || node.kind === "RESTRICTION_TYPE") {

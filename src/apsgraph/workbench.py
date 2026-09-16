@@ -38,6 +38,8 @@ KIND_GROUPS: Dict[str, Dict[str, Any]] = {
     # Real-world .error.xml files are errorConf roots (kind ERRORCONF), not
     # dictionaries; their detail carries errors>error message definitions.
     "error_code": {"kinds": {"ERRORCONF"}, "suffix": ".error.xml"},
+    # 错误码数据项：粒度为 GnError.GnError.E0001 这类 error 明细节点
+    "error_item": {"kinds": {"ERROR"}, "suffix": ".error.xml"},
     "complex_type": {"kinds": {"COMPLEX_TYPE"}},
     # 字典数据项只收字典文件（.d_schema.xml，父节点为 DICTIONARY）下的 element，
     # 粒度为 full_id 形如 BpDict.B.btch_grp_num；复合类型的 element 不在此页。
@@ -105,7 +107,14 @@ def _like_clause(query: str, dimension: str) -> Tuple[str, List[Any]]:
     columns = LIKE_COLUMNS.get(dimension)
     if columns is None:
         raise ValueError(f"unknown search dimension: {dimension}")
-    escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    def _escape(value: str) -> str:
+        return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    # fullid 维度支持按 "." 分段的层级筛选：GnError.GnError.E0001 会命中
+    # GnError.GnError.Genl.E0001（中间分组段被省略时仍可定位）。
+    if dimension == "fullid" and "." in query:
+        pattern = "%" + "%".join(_escape(segment) for segment in query.split(".")) + "%"
+        return "(n.full_id like ? escape '\\')", [pattern]
+    escaped = _escape(query)
     clause = " or ".join(f"{column} like ? escape '\\'" for column in columns)
     return f"({clause})", [f"%{escaped}%"] * len(columns)
 
@@ -443,16 +452,28 @@ def _error_code_detail(conn: sqlite3.Connection, node_id: int) -> Dict[str, Any]
     groups = []
     for group in _descendants_of_kind(conn, node_id, "ERRORS"):
         rows = conn.execute(
-            """select n.stable_id,n.kind,n.raw_id,n.full_id,n.xml_tag,n.properties_json
+            """select n.id,n.stable_id,n.kind,n.raw_id,n.full_id,n.xml_tag,n.properties_json
             from nodes n where n.owner_node_id=? order by n.id""", (group["id"],)).fetchall()
-        groups.append({"node": group, "errors": [_row_to_dict(row) for row in rows]})
+        groups.append({"node": group, "errors": [_error_row(conn, row) for row in rows]})
     orphans = conn.execute(
-        """select n.stable_id,n.kind,n.raw_id,n.full_id,n.xml_tag,n.properties_json
+        """select n.id,n.stable_id,n.kind,n.raw_id,n.full_id,n.xml_tag,n.properties_json
         from nodes n where n.owner_node_id=? and n.kind='ERROR' order by n.id""",
         (node_id,)).fetchall()
     if orphans:
-        groups.append({"node": None, "errors": [_row_to_dict(row) for row in orphans]})
+        groups.append({"node": None, "errors": [_error_row(conn, row) for row in orphans]})
     return {"groups": groups}
+
+
+def _error_row(conn: sqlite3.Connection, row: sqlite3.Row) -> Dict[str, Any]:
+    """One error definition plus its parameter ids for the detail tables."""
+    item = _row_to_dict(row)
+    params = conn.execute(
+        "select raw_id, full_id, properties_json from nodes where owner_node_id=? order by id",
+        (row["id"],)).fetchall()
+    item["parameters"] = ", ".join(
+        str(json.loads(p["properties_json"] or "{}").get("id") or p["raw_id"])
+        for p in params)
+    return item
 
 
 def _dictionary_detail(conn: sqlite3.Connection, node_id: int) -> Dict[str, Any]:
@@ -485,6 +506,8 @@ def _detail_for_kind(conn: sqlite3.Connection, kind: str, node_id: int) -> Dict[
         return _batch_detail(conn, node_id)
     if kind == "ERRORCONF":
         return _error_code_detail(conn, node_id)
+    if kind == "ERROR":
+        return {"parameters": _descendants_of_kind(conn, node_id, "SQL_PARAMETER")}
     if kind == "ENUM_VALUE":
         return {"enum_values": []}
     if kind in {"RESTRICTION_TYPE", "DICTIONARY", "COMPLEX_TYPE"}:

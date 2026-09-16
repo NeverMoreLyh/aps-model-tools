@@ -62,6 +62,13 @@ FIXTURE_FILES = {
   </service>
 </serviceType>
 """,
+    "ctype/DemoCType.c_schema.xml": """<?xml version="1.0"?>
+<schema id="DemoCType" package="demo.ctype">
+  <complexType id="CustPojo" longname="客户POJO">
+    <element id="extra" type="Base.U_NAME"/>
+  </complexType>
+</schema>
+""",
     "tran/demoTran.flowtrans.xml": """<?xml version="1.0"?>
 <flowtran id="demoTran" longname="演示交易" package="demo.tran">
   <interface>
@@ -159,9 +166,15 @@ class WorkbenchQueryTest(WorkbenchTestBase):
         self.assertEqual(1, operations["total"])
         self.assertEqual("DemoSvc.openAccount", operations["results"][0]["full_id"])
 
+        # 字典数据项只收字典文件（.d_schema.xml 且父为 DICTIONARY）的 element
         elements = search_group(self.conn, "dict_element", query="CustomerInfo.name", dimension="fullid")
         self.assertEqual(1, elements["total"])
         self.assertEqual("DemoDict.CustomerInfo.name", elements["results"][0]["full_id"])
+        self.assertEqual(0, search_group(self.conn, "dict_element", query="extra", dimension="id")["total"])
+
+        complex_types = search_group(self.conn, "complex_type", query="CustPojo", dimension="id")
+        self.assertEqual(1, complex_types["total"])
+        self.assertEqual("DemoCType.CustPojo", complex_types["results"][0]["full_id"])
 
     def test_dictionary_and_error_code_split_by_suffix(self):
         dictionaries = search_group(self.conn, "dictionary")
@@ -204,7 +217,7 @@ class WorkbenchQueryTest(WorkbenchTestBase):
         self.assertIn("ERRORCONF", groups)
 
         schemas = search_group(self.conn, "top", root_kind="SCHEMA")
-        self.assertEqual(3, schemas["total"])  # Base / DemoDict / DemoTables
+        self.assertEqual(4, schemas["total"])  # Base / DemoDict / DemoTables / DemoCType
 
         every_top = search_group(self.conn, "top")
         self.assertEqual(sum(groups.values()), every_top["total"])

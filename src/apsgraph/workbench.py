@@ -39,7 +39,9 @@ KIND_GROUPS: Dict[str, Dict[str, Any]] = {
     # dictionaries; their detail carries errors>error message definitions.
     "error_code": {"kinds": {"ERRORCONF"}, "suffix": ".error.xml"},
     "complex_type": {"kinds": {"COMPLEX_TYPE"}},
-    "dict_element": {"kinds": {"ELEMENT"}},
+    # 字典数据项只收字典文件（.d_schema.xml，父节点为 DICTIONARY）下的 element，
+    # 粒度为 full_id 形如 BpDict.B.btch_grp_num；复合类型的 element 不在此页。
+    "dict_element": {"kinds": {"ELEMENT"}, "dict_only": True},
     "table": {"kinds": {"TABLE"}},
     "service": {"kinds": {"SERVICE_TYPE"}},
     "service_operation": {"kinds": {"SERVICE_OPERATION"}},
@@ -134,6 +136,9 @@ def _group_filters(group: str, kinds: List[str], root_kind: str = "") -> Tuple[s
         if suffix:
             clauses.append("f.path like ?")
             params.append("%" + suffix)
+        if KIND_GROUPS[group].get("dict_only"):
+            clauses.append("exists(select 1 from nodes p where p.id=n.owner_node_id and p.kind='DICTIONARY')")
+            clauses.append("f.path like '%.d_schema.xml'")
     return (" and " + " and ".join(clauses), params) if clauses else ("", params)
 
 

@@ -227,7 +227,7 @@ function propGrid(props, keys) {
 const DESC_KEYS = ["desc", "description", "remark"];
 const DEFAULT_KEYS = ["default", "defaultValue"];
 const IO_COLS = [
-  { label: "字典ID", keys: ["ref"], link: true },
+  { label: "字典ID", keys: ["ref"], fallback: "full_id", link: true },
   { label: "字段", keys: ["id"] },
   { label: "中文名", keys: ["longname", "name"] },
   { label: "类型", keys: ["type"], link: true },
@@ -262,12 +262,14 @@ function fieldsTable(rows, columns) {
     typeof col === "string" ? { label: col, keys: [col] } : col);
   const head = cols.map((col) => `<th>${esc(col.label)}</th>`).join("");
   const body = rows.map((row) => {
-    const props = row.properties || row;
+    // 数据项/字段行允许“字典ID”在 ref 缺省时回退为节点自身的 full_id（如 BpDict.A.addr）
+    const props = Object.assign({}, row.properties || {}, row.full_id ? { full_id: row.full_id } : {});
     return "<tr>" + cols.map((col) => {
       let value = "";
       for (const key of col.keys) {
         if (props[key] !== undefined && props[key] !== "") { value = props[key]; break; }
       }
+      if (!value && col.fallback && props[col.fallback]) value = props[col.fallback];
       if (col.link && typeof value === "string" && MODEL_ID_RE.test(value)) {
         return `<td><a class="node-link" data-id="${esc(value)}">${esc(value)}</a></td>`;
       }
@@ -306,37 +308,29 @@ function cleanMermaidLabel(value) {
 }
 
 function buildMermaidCode(steps) {
-  const lines = ["flowchart TD", `S(["开始"])`];
+  const lines = ["flowchart TB", `S(["开始"])`];
   let seq = 0;
-  const leaves = [];
-  function walk(nodes, parentId) {
-    let last = parentId;
+  // 纵向流程：所有步骤（含 case/when 分支与其服务）按执行顺序垂直串联，
+  // 不做水平分叉；when 的条件标注在进入该分支的边上。
+  function walk(nodes, prevId) {
+    let last = prevId;
     for (const node of nodes) {
       const id = `N${seq++}`;
       const isCase = node.xml_tag === "case";
       const base = node.label || node.raw_id || "";
       const text = cleanMermaidLabel(base === node.longname ? base : `${base} ${node.longname || ""}`);
-      if (isCase) {
-        lines.push(`${last} --> ${id}{"${text}"}`);
-      } else {
-        let edgeText = "";
-        if (node.xml_tag === "when") {
-          edgeText = cleanMermaidLabel(node.longname || node.test).slice(0, 40);
-        }
-        lines.push(`${last} -->${edgeText ? `|${edgeText}|` : ""} ${id}["${text}"]`);
+      let edgeText = "";
+      if (node.xml_tag === "when") {
+        edgeText = cleanMermaidLabel(node.longname || node.test).slice(0, 40);
       }
-      if (node.children && node.children.length) {
-        walk(node.children, id);
-      } else {
-        leaves.push(id);
-      }
-      last = id;
+      lines.push(`${last} -->${edgeText ? `|${edgeText}|` : ""} ${id}${isCase ? "{" : "["}"${text}"${isCase ? "}" : "]"}`);
+      last = (node.children && node.children.length) ? walk(node.children, id) : id;
     }
     return last;
   }
-  walk(steps, "S");
+  const lastId = walk(steps, "S");
   lines.push(`E(["结束"])`);
-  for (const leaf of (leaves.length ? leaves : ["S"])) lines.push(`${leaf} --> E`);
+  lines.push(`${lastId} --> E`);
   return lines.join("\n");
 }
 

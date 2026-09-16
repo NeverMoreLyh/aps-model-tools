@@ -260,6 +260,15 @@ class WorkbenchQueryTest(WorkbenchTestBase):
         self.assertEqual(1, nsql["total"])
         self.assertEqual("StPrc", nsql["results"][0]["full_id"])
         self.assertEqual("SQL_GROUP", nsql["results"][0]["kind"])
+
+        # 命名SQL页：数据项粒度 NAMED_SQL（如 ApBatchFileSqls.upd_tb_file_tran_req）
+        items = search_group(self.conn, "nsql_item", query="upd_demo", dimension="id")
+        self.assertEqual(1, items["total"])
+        self.assertEqual("StPrc.upd_demo", items["results"][0]["full_id"])
+        self.assertEqual("NAMED_SQL", items["results"][0]["kind"])
+        item_detail = node_detail(self.conn, items["results"][0]["stable_id"],
+                                  source_root=self.root)["detail"]
+        self.assertEqual(["NONE", "oracle"], [s["type"] for s in item_detail["sqls"]])
         nsql_detail = node_detail(self.conn, nsql["results"][0]["stable_id"])["detail"]
         self.assertEqual(["upd_demo"], [s["raw_id"] for s in nsql_detail["statements"]])
         stmt_detail = node_detail(self.conn, nsql_detail["statements"][0]["stable_id"])["detail"]
@@ -530,6 +539,7 @@ class WorkbenchHttpTest(WorkbenchTestBase):
         self.assertIn("nodes", dash["stats"])
         self.assertEqual(3, dash["counts"]["table"])  # audit / base_cols / demo_user
         self.assertIn("enum", dash["counts"])
+        self.assertIn("nsql_item", dash["counts"])
 
         status, _ = self._get("/api/unknown")
         self.assertEqual(404, status)

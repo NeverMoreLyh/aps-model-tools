@@ -18,16 +18,17 @@ const PAGES = [
   { id: "error_item", label: "错误码", group: "error_item" },
   { id: "constant", label: "常量", group: "constant" },
   { id: "file_batch", label: "文件批量", group: "file_batch" },
-  { id: "nsql", label: "命名SQL", group: "nsql" },
+  { id: "nsql", label: "命名SQL文件", group: "nsql" },
+  { id: "nsql_item", label: "命名SQL", group: "nsql_item" },
   { id: "sharding", label: "分片", group: "sharding" },
   { id: "parse_failed", label: "解析失败", group: "parse_failed" },
 ];
 
 /* 左侧菜单一二级聚合：一级菜单之外统一归入“其他” */
 const NAV_PRIMARY = ["transaction", "service", "table", "dict_element", "enum", "base_type"];
-const NAV_OTHER = ["top", "service_file", "batch", "file_batch", "nsql", "sharding",
-                   "complex_type", "dictionary", "error_code", "error_item", "constant",
-                   "parse_failed"];
+const NAV_OTHER = ["top", "service_file", "batch", "file_batch", "nsql", "nsql_item",
+                   "sharding", "complex_type", "dictionary", "error_code", "error_item",
+                   "constant", "parse_failed"];
 let navOtherOpen = false;
 /* 折叠窄条上的单字徽标（未指定的取中文名首字） */
 const NAV_SHORT = { dashboard: "总", transaction: "F", service: "S", table: "T",
@@ -123,7 +124,8 @@ const DASH_CARDS = [
   { group: "transaction", label: "交易" },
   { group: "batch", label: "批量交易" },
   { group: "file_batch", label: "文件批量" },
-  { group: "nsql", label: "命名SQL" },
+  { group: "nsql", label: "命名SQL文件" },
+  { group: "nsql_item", label: "命名SQL" },
   { group: "sharding", label: "分片" },
   { group: "complex_type", label: "复合类型" },
   { group: "dictionary", label: "数据字典文件" },

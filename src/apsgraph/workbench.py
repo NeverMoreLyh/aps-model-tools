@@ -45,8 +45,10 @@ KIND_GROUPS: Dict[str, Dict[str, Any]] = {
     "base_type": {"kinds": {"RESTRICTION_TYPE"}, "suffix": ".u_schema.xml"},
     # 文件批量：file_batch_transaction 根（结构同批量交易：文件模板字段 + 输入）
     "file_batch": {"kinds": {"FILE_BATCH_TRANSACTION"}, "suffix": ".file_batch_tran.xml"},
-    # 命名SQL：sqls 根，语句为 select/update/... 等 NAMED_SQL 节点
+    # 命名SQL文件：sqls 根，语句为 select/update/... 等 NAMED_SQL 节点
     "nsql": {"kinds": {"SQL_GROUP"}, "suffix": ".nsql.xml"},
+    # 命名SQL：数据项粒度 NAMED_SQL（如 ApBatchFileSqls.upd_tb_file_tran_req）
+    "nsql_item": {"kinds": {"NAMED_SQL"}, "suffix": ".nsql.xml"},
     # 分片：ShardingStrategy 根，策略为 strategy 节点
     "sharding": {"kinds": {"SHARDINGSTRATEGY"}, "suffix": ".sharding.xml"},
     # 常量数据项：.constant.xml 中 constantConf>constants>constant（message/description）
@@ -305,7 +307,7 @@ def _resolve_node_row(conn: sqlite3.Connection, node_ref: str) -> sqlite3.Row:
 
 DASHBOARD_GROUPS = [
     "top", "table", "service", "service_operation", "transaction", "batch",
-    "file_batch", "nsql", "sharding", "complex_type", "dictionary",
+    "file_batch", "nsql", "nsql_item", "sharding", "complex_type", "dictionary",
     "dict_element", "base_type", "error_code", "error_item", "constant",
 ]
 

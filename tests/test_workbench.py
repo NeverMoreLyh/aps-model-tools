@@ -439,6 +439,11 @@ class WorkbenchQueryTest(WorkbenchTestBase):
         none_frag = node_detail(self.conn, table["results"][0]["stable_id"])["xml_fragment"]
         self.assertIsNone(none_frag)
 
+        # 文件级节点（数据字典文件/命名SQL文件/错误码文件）不展示 XML 片段
+        dicts = search_group(self.conn, "dictionary")
+        self.assertIsNone(node_detail(self.conn, dicts["results"][0]["stable_id"],
+                                      source_root=self.root)["xml_fragment"])
+
     def test_child_nodes_tree(self):
         schemas = search_group(self.conn, "top", root_kind="SCHEMA")
         demo_tables = next(item for item in schemas["results"] if item["full_id"] == "DemoTables")

@@ -379,6 +379,10 @@ def _source_xml_fragment(conn: sqlite3.Connection, node: Dict[str, Any],
     return {"path": node["file_path"], "xml": fragment}
 
 
+# 文件级节点的 XML 片段与整份源文件几乎相同，跳过展示
+FRAGMENT_SKIP_KINDS = {"SQL_GROUP", "DICTIONARY", "ERRORCONF"}
+
+
 def _resolve_node_row(conn: sqlite3.Connection, node_ref: str) -> sqlite3.Row:
     """Resolve a node by stable_id, or by exact full_id/raw_id as fallback."""
     row = conn.execute(NODE_SELECT + " where n.stable_id=?", (node_ref,)).fetchone()
@@ -686,8 +690,11 @@ def node_detail(conn: sqlite3.Connection, stable_id: str,
     if node["kind"] == "NAMED_SQL":
         detail["sqls"] = _named_sql_texts(conn, node, source_root)
     node["properties"] = node.get("properties") or {}
+    # 文件级节点（命名SQL文件/数据字典文件/错误码文件）的片段等于大半份源文件，无展示意义
+    fragment = (None if node["kind"] in FRAGMENT_SKIP_KINDS
+                else _source_xml_fragment(conn, node, source_root))
     return {"node": node, "children": children, "detail": detail,
-            "xml_fragment": _source_xml_fragment(conn, node, source_root),
+            "xml_fragment": fragment,
             "out_edges": out_edges, "in_edges": in_edges}
 
 

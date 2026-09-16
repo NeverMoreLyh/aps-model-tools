@@ -1,6 +1,6 @@
 # APSGraph 设计文档
 
-> 版本：0.21.2
+> 版本：0.22.0
 > 更新时间：2026-09-16  
 > 文档定位：说明 APSGraph 的关键架构、模块设计、数据模型、算法、并发模型、性能设计和安全边界。
 
@@ -90,7 +90,7 @@
 - 枚举页为主从布局：`/api/enums` 按 ENUM_VALUE 的 owner（restrictionType 等）聚合出枚举列表（含枚举值数量），详情展示全部枚举值。
 - 详情装配用递归 CTE 沿 `owner_node_id` 收集子结构：表的字段/索引/ODB 索引/序列，服务操作的输入输出（`input`/`output` 容器为无 id 穿透节点，需在子树中定位），交易的输入输出与 flow 编排树——真实 FlowTran 的 flow 混合 `method` 直调步骤与 `case>when>service` 分支（when 带 `test` 表达式），服务端递归构建 flow 树、前端用 mermaid 渲染流程图（分支边标注 when 条件，CDN 不可用时降级为缩进列表），`serviceName`/`transactionId` 以 full_id/raw_id 兜底解析为可跳转目标；错误码按 `errors` 分组展示 `error` 明细。
 - 基础类型页数据为内置 APS SimpleType 清单（与 `docs/aps-type-database-mapping.md` 基线一致），不依赖索引。
-- 前端为 `workbench_static/` 下的单页应用（vanilla HTML/JS/CSS），随 wheel 以 package-data 分发；mermaid 流程图库（mermaid@10.9.1 minified）同样打包进 `workbench_static/`，离线可用，加载失败时 flow 自动降级为缩进列表；流程图画布提供工具栏（放大/缩小/重置/全屏）、滚轮缩放与拖拽平移（CSS transform 实现，pointer capture 拖拽）；左侧菜单可收起，结果列表默认 1/4 宽并由分隔条拖拽调节；结果分页（每页 50）、子孙树懒加载；结果列表只展示 `fullId/id：中文名`，详情属性过滤带命名空间的 XML 属性（如 `xsi:noNamespaceSchemaLocation`）。详情表格列按元数据模型对象定义（输入输出/数据项为 `字典ID,字段,中文名,类型,必填,多值,默认值,固定值,描述,别名`，表字段为 `字典ID,字段,DbName,中文名,类型,可为空,默认值,描述,是否主键`），`type`/`ref` 列值为含 `.` 的模型 fullId 时渲染为节点跳转链接（复用 `/api/node` 的 full_id/raw_id 兜底解析）。
+- 前端为 `workbench_static/` 下的单页应用（vanilla HTML/JS/CSS），随 wheel 以 package-data 分发；mermaid 流程图库（mermaid@10.9.1 minified）同样打包进 `workbench_static/`，离线可用，加载失败时 flow 自动降级为缩进列表；流程图画布提供工具栏（放大/缩小/重置/全屏）、滚轮缩放与拖拽平移（CSS transform 实现，pointer capture 拖拽）；左侧菜单可收起，结果列表默认 1/4 宽并由分隔条拖拽调节；结果分页（每页 50）、子孙树懒加载；结果列表只展示 `fullId/id：中文名`，详情属性过滤带命名空间的 XML 属性（如 `xsi:noNamespaceSchemaLocation`）。详情表格列按元数据模型对象定义（输入输出/数据项为 `字典ID,字段,中文名,类型,必填,多值,默认值,固定值,描述,别名`，表字段为 `字典ID,字段,DbName,中文名,类型,可为空,默认值,描述,是否主键`），值符合模型 fullId 形态（正则 `^[A-Z]\w*(\.\w+)+$`，排除 Java 包名等小写开头值）的属性一律渲染为节点跳转链接（复用 `/api/node` 的 full_id/raw_id 兜底解析）；详情面板维护跳转历史栈并提供返回上一级按钮，页面切换时清空。
 
 ### 3.6 原始 XML 与语义节点索引
 

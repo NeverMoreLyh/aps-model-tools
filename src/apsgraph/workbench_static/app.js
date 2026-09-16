@@ -73,6 +73,8 @@ function switchPage(pageId) {
     state.kinds = [];
   }
   $("#detail-pane").innerHTML = "";
+  detailHistory.stack = [];
+  detailHistory.current = null;
   renderNav();
   runSearch();
 }
@@ -198,12 +200,25 @@ function updatePager() {
   $("#btn-next").disabled = state.page >= pages;
 }
 
+/* 模型 fullId 形态：大写开头的分段 + 点分（如 BaseType.U_ADDR、BpDict.E.entp_scale）。
+   Java 包名等小写开头带点的值不会命中，避免误加链接 */
+const MODEL_ID_RE = /^[A-Z][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)+$/;
+
+/* 详情跳转历史，支持“返回上一级” */
+const detailHistory = { stack: [], current: null };
+
 /* ---------- 详情 ---------- */
 function propGrid(props, keys) {
   const list = keys || Object.keys(props || {}).sort();
   // 过滤带命名空间的 XML 属性（如 {http://www.w3.org/2001/XMLSchema-instance}noNamespaceSchemaLocation）
   const rows = list.filter((key) => !key.includes("{") && props[key] !== undefined && props[key] !== "")
-    .map((key) => `<span class="k">${esc(key)}</span><span class="v">${esc(props[key])}</span>`).join("");
+    .map((key) => {
+      const value = props[key];
+      const rendered = (typeof value === "string" && MODEL_ID_RE.test(value))
+        ? `<a class="node-link" data-id="${esc(value)}">${esc(value)}</a>`
+        : esc(value);
+      return `<span class="k">${esc(key)}</span><span class="v">${rendered}</span>`;
+    }).join("");
   return rows ? `<div class="props-grid">${rows}</div>` : "";
 }
 
@@ -253,7 +268,7 @@ function fieldsTable(rows, columns) {
       for (const key of col.keys) {
         if (props[key] !== undefined && props[key] !== "") { value = props[key]; break; }
       }
-      if (col.link && typeof value === "string" && value.includes(".")) {
+      if (col.link && typeof value === "string" && MODEL_ID_RE.test(value)) {
         return `<td><a class="node-link" data-id="${esc(value)}">${esc(value)}</a></td>`;
       }
       return `<td>${esc(value)}</td>`;
@@ -490,14 +505,31 @@ function bindTree(container) {
   });
 }
 
-async function showDetail(nodeRef) {
+function goBackDetail() {
+  const prev = detailHistory.stack.pop();
+  if (prev) {
+    detailHistory.current = prev;
+    showDetail(prev, true);
+  }
+}
+
+async function showDetail(nodeRef, isBack = false) {
   const pane = $("#detail-pane");
   pane.innerHTML = `<div class="empty-tip">加载中…</div>`;
+  if (!isBack) {
+    if (detailHistory.current && detailHistory.current !== nodeRef) {
+      detailHistory.stack.push(detailHistory.current);
+      if (detailHistory.stack.length > 50) detailHistory.stack.shift();
+    }
+    detailHistory.current = nodeRef;
+  }
   try {
     const data = await api("/api/node", { id: nodeRef });
     const node = data.node;
     const props = node.properties || {};
-    let html = `<div class="detail-title">${esc(props.longname || props.name || node.raw_id || node.full_id)}</div>
+    const backHtml = detailHistory.stack.length
+      ? `<button id="btn-back" class="back-btn">← 返回上一级</button>` : "";
+    let html = backHtml + `<div class="detail-title">${esc(props.longname || props.name || node.raw_id || node.full_id)}</div>
       <div class="detail-sub"><span class="kind-badge">${esc(node.kind)}</span>
       fullId: ${esc(node.full_id)} · id: ${esc(node.raw_id)}<br>来源：${esc(node.file_path)}</div>`;
     html += propGrid(props);
@@ -508,6 +540,8 @@ async function showDetail(nodeRef) {
     html += edgeSection("被引用（入）", data.in_edges || []);
     pane.innerHTML = html;
     pane.scrollTop = 0;
+    const backBtn = pane.querySelector("#btn-back");
+    if (backBtn) backBtn.addEventListener("click", goBackDetail);
     pane.querySelectorAll("a.node-link").forEach((link) =>
       link.addEventListener("click", () => showDetail(link.dataset.id)));
     const tree = pane.querySelector(".tree");
@@ -515,6 +549,7 @@ async function showDetail(nodeRef) {
     const flowHolder = pane.querySelector(".flow-holder");
     if (flowHolder && (data.detail || {}).flow_steps) await renderFlow(data.detail.flow_steps, flowHolder);
   } catch (error) {
+    if (!isBack) detailHistory.current = detailHistory.stack.pop() || null;
     pane.innerHTML = `<div class="error-banner">${esc(error.message)}</div>`;
   }
 }

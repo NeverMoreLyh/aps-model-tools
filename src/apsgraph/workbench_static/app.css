@@ -60,6 +60,8 @@ table.result-table { width: 100%; border-collapse: collapse; }
 .detail-section { margin-bottom: 16px; }
 .detail-section > h3 { margin: 0 0 6px; font-size: 13px; color: var(--accent); border-bottom: 1px solid var(--border); padding-bottom: 4px; }
 .detail-title { font-size: 16px; font-weight: 700; margin-bottom: 2px; }
+.back-btn { font: inherit; font-size: 12px; padding: 2px 10px; margin-bottom: 10px; border: 1px solid var(--border); border-radius: 4px; background: #fff; cursor: pointer; }
+.back-btn:hover { background: var(--accent-soft); }
 .detail-sub { color: var(--muted); font-size: 12px; margin-bottom: 10px; word-break: break-all; }
 .props-grid { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; font-size: 13px; margin-bottom: 8px; }
 .props-grid .k { color: var(--muted); }

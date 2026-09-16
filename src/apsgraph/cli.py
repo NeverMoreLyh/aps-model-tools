@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
+import time
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -57,6 +59,39 @@ def _positive_limit(value: str) -> int:
 
 def _progress(message: str) -> None:
     print(f"[apsgraph] {message}", file=sys.stderr, flush=True)
+
+
+_PROGRESS_BAR_RE = re.compile(r"(scan|sync): parsing (\d+)/(\d+)")
+
+
+def _progress_bar(message: str) -> None:
+    """Compact stderr progress: a single-line bar for per-file parsing,
+    plain lines for other stages."""
+    match = _PROGRESS_BAR_RE.search(message)
+    if match:
+        stage, done, total = match.group(1), int(match.group(2)), int(match.group(3))
+        width = 24
+        filled = int(width * done / total) if total else 0
+        bar = "█" * filled + "░" * (width - filled)
+        path = message.rsplit(" ", 1)[-1] if " " in message else ""
+        sys.stderr.write(
+            f"\r[apsgraph] {stage} |{bar}| {done}/{total} "
+            f"({done * 100 // total}%) {path[:60]}\x1b[K")
+        sys.stderr.flush()
+        return
+    sys.stderr.write("\n[apsgraph] " + message + "\n")
+
+
+def _progress_bar_end() -> None:
+    sys.stderr.write("\n")
+    sys.stderr.flush()
+
+
+def _print_scan_summary(summary: Dict[str, Any], elapsed: float) -> None:
+    sys.stderr.write(
+        f"[apsgraph] scan 完成：{summary['parsed_files']}/{summary['discovered_files']} "
+        f"文件已解析，{summary['failed_files']} 失败；节点 {summary['nodes']}，边 {summary['edges']}，"
+        f"未解析引用 {summary['unresolved']}；耗时 {elapsed:.1f}s\n")
 
 
 DEFAULT_DB = Path(".apsgraph/apsgraph.db")
@@ -315,14 +350,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         if args.command == "scan":
+            started = time.time()
             external_indexes = _external_indexes(args)
             if external_indexes:
                 summary, external = scan_workspace_with_external_indexes(
-                    args.workspace, args.db, external_indexes, args.fail_on_parse_error, _progress
+                    args.workspace, args.db, external_indexes, args.fail_on_parse_error, _progress_bar
                 )
+                _progress_bar_end()
+                _print_scan_summary(asdict(summary), time.time() - started)
                 _json({"scan": asdict(summary), "external": external})
             else:
-                summary = scan_workspace(args.workspace, args.db, args.fail_on_parse_error, _progress)
+                summary = scan_workspace(args.workspace, args.db, args.fail_on_parse_error, _progress_bar)
+                _progress_bar_end()
+                _print_scan_summary(asdict(summary), time.time() - started)
                 for target in summary.unresolved_models:
                     print(f"[apsgraph] warning: unresolved model reference: {target}",
                           file=sys.stderr, flush=True)
@@ -332,7 +372,14 @@ def main(argv: Optional[List[str]] = None) -> int:
             _json(_options_report(args.workspace))
             return 0
         if args.command == "sync":
-            summary = sync_workspace(args.workspace, args.db, args.fail_on_parse_error, _progress)
+            started = time.time()
+            summary = sync_workspace(args.workspace, args.db, args.fail_on_parse_error, _progress_bar)
+            _progress_bar_end()
+            info = asdict(summary)
+            sys.stderr.write(
+                f"[apsgraph] sync 完成：新增 {info['added']}，修改 {info['modified']}，"
+                f"删除 {info['deleted']}；节点 {info['nodes']}，边 {info['edges']}；"
+                f"耗时 {time.time() - started:.1f}s\n")
             _json(asdict(summary))
             return 0
         if args.command == "serve-mcp":

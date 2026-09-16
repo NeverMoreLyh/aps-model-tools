@@ -156,7 +156,7 @@ TRANSACTION
 
 - `scanner` 递归发现受支持的 XML 文件，解析语义节点、属性和关系并写入 SQLite。
 - `scan` 通过 staging 数据库完成全量重建，`sync` 依据路径和 SHA-256 增量更新。
-- `scan` 和 `sync` 将阶段进度写入 stderr，格式为当前阶段、已处理数/总数、百分比和文件路径。
+- `scan` 和 `sync` 将进度写入 stderr：逐文件解析以单行进度条（`\r` 原地刷新，含阶段、进度条、已处理数/总数、百分比与当前文件）呈现，其他阶段为普通单行日志；扫描/同步完成后在 stderr 输出一条汇总（文件解析结果、节点/边数量、未解析引用、耗时）。JSON 结果仍只写 stdout。
 - 外部 SQLite 索引通过 `--external-db` 合并，workspace 定义优先。
 
 ## 6. 并发与性能设计

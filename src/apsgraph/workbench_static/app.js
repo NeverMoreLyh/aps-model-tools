@@ -207,15 +207,59 @@ function propGrid(props, keys) {
   return rows ? `<div class="props-grid">${rows}</div>` : "";
 }
 
-function fieldsTable(fields, columns) {
-  if (!fields || !fields.length) return `<div class="muted">（无）</div>`;
-  const cols = columns || ["id", "longname", "type", "ref", "maxLength", "nullable", "primarykey", "defaultValue"];
-  const head = cols.map((c) => `<th>${esc(c)}</th>`).join("");
-  const rows = fields.map((field) => {
-    const props = field.properties || field;
-    return "<tr>" + cols.map((c) => `<td>${esc(props[c])}</td>`).join("") + "</tr>";
+/* 按元数据模型对象定义的表格列。keys 为按序回退的属性名；
+   link=true 的列（ref/type）在值为模型 fullId（含 "."）时渲染为跳转链接 */
+const DESC_KEYS = ["desc", "description", "remark"];
+const DEFAULT_KEYS = ["default", "defaultValue"];
+const IO_COLS = [
+  { label: "字典ID", keys: ["ref"], link: true },
+  { label: "字段", keys: ["id"] },
+  { label: "中文名", keys: ["longname", "name"] },
+  { label: "类型", keys: ["type"], link: true },
+  { label: "必填", keys: ["required"] },
+  { label: "多值", keys: ["multi"] },
+  { label: "默认值", keys: DEFAULT_KEYS },
+  { label: "固定值", keys: ["fixedValue"] },
+  { label: "描述", keys: DESC_KEYS },
+  { label: "别名", keys: ["alias"] },
+];
+const TABLE_COLS = [
+  { label: "字典ID", keys: ["ref"], link: true },
+  { label: "字段", keys: ["id"] },
+  { label: "DbName", keys: ["dbname"] },
+  { label: "中文名", keys: ["longname", "name"] },
+  { label: "类型", keys: ["type"], link: true },
+  { label: "可为空", keys: ["nullable"] },
+  { label: "默认值", keys: DEFAULT_KEYS },
+  { label: "描述", keys: DESC_KEYS },
+  { label: "是否主键", keys: ["primarykey"] },
+];
+const ENUM_COLS = [
+  { label: "枚举值ID", keys: ["id", "raw_id"] },
+  { label: "值", keys: ["value"] },
+  { label: "中文名", keys: ["longname"] },
+  { label: "描述", keys: DESC_KEYS },
+];
+
+function fieldsTable(rows, columns) {
+  if (!rows || !rows.length) return `<div class="muted">（无）</div>`;
+  const cols = (columns || ["id", "longname", "type", "ref"]).map((col) =>
+    typeof col === "string" ? { label: col, keys: [col] } : col);
+  const head = cols.map((col) => `<th>${esc(col.label)}</th>`).join("");
+  const body = rows.map((row) => {
+    const props = row.properties || row;
+    return "<tr>" + cols.map((col) => {
+      let value = "";
+      for (const key of col.keys) {
+        if (props[key] !== undefined && props[key] !== "") { value = props[key]; break; }
+      }
+      if (col.link && typeof value === "string" && value.includes(".")) {
+        return `<td><a class="node-link" data-id="${esc(value)}">${esc(value)}</a></td>`;
+      }
+      return `<td>${esc(value)}</td>`;
+    }).join("") + "</tr>";
   }).join("");
-  return `<table class="detail-table"><thead><tr>${head}</tr></thead><tbody>${rows}</tbody></table>`;
+  return `<table class="detail-table"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
 }
 
 function nodeLink(node, unresolvedFallback) {
@@ -374,7 +418,7 @@ function renderDetailSections(data) {
   const detail = data.detail || {};
   let html = "";
   if (node.kind === "TABLE") {
-    html += section("字段（fields）", fieldsTable(detail.fields));
+    html += section("字段（fields）", fieldsTable(detail.fields, TABLE_COLS));
     html += section("物理索引（indexes）", detail.indexes && detail.indexes.length
       ? fieldsTable(detail.indexes, ["id", "type", "fields"]) : `<div class="muted">（无）</div>`);
     html += section("ODB 索引（odbindexes）", detail.odbindexes && detail.odbindexes.length
@@ -385,20 +429,20 @@ function renderDetailSections(data) {
     for (const op of detail.operations || []) {
       const opNode = op.node || {};
       html += section(`服务操作：${opNode.raw_id || ""} ${opNode.properties && opNode.properties.longname ? "· " + esc(opNode.properties.longname) : ""}`,
-        section("输入（input）", fieldsTable(op.input)) +
-        section("输出（output）", fieldsTable(op.output)));
+        section("输入（input）", fieldsTable(op.input, IO_COLS)) +
+        section("输出（output）", fieldsTable(op.output, IO_COLS)));
     }
     if (!detail.operations || !detail.operations.length) html += section("服务操作", `<div class="muted">（无）</div>`);
   } else if (node.kind === "SERVICE_OPERATION") {
-    html += section("输入（input）", fieldsTable(detail.input));
-    html += section("输出（output）", fieldsTable(detail.output));
+    html += section("输入（input）", fieldsTable(detail.input, IO_COLS));
+    html += section("输出（output）", fieldsTable(detail.output, IO_COLS));
   } else if (node.kind === "TRANSACTION") {
-    html += section("输入（input）", fieldsTable(detail.input));
-    html += section("输出（output）", fieldsTable(detail.output));
+    html += section("输入（input）", fieldsTable(detail.input, IO_COLS));
+    html += section("输出（output）", fieldsTable(detail.output, IO_COLS));
     const steps = detail.flow_steps || [];
     html += section("流程编排（flow）", `<div class="flow-holder">${steps.length ? "渲染中…" : `<div class="muted">（无）</div>`}</div>`);
   } else if (node.kind === "BATCH_TRANSACTION") {
-    html += section("输入字段", fieldsTable(detail.input));
+    html += section("输入字段", fieldsTable(detail.input, IO_COLS));
     if (detail.steps && detail.steps.length) html += section("批量步骤", fieldsTable(detail.steps, ["raw_id", "full_id", "longname"]));
     if (detail.groups && detail.groups.length) html += section("步骤组", fieldsTable(detail.groups, ["raw_id", "full_id", "longname"]));
   } else if (node.kind === "ERRORCONF") {
@@ -408,9 +452,9 @@ function renderDetailSections(data) {
     }
     if (!detail.groups || !detail.groups.length) html += section("错误码", `<div class="muted">（无）</div>`);
   } else if (node.kind === "DICTIONARY" || node.kind === "COMPLEX_TYPE" || node.kind === "RESTRICTION_TYPE") {
-    if (detail.elements && detail.elements.length) html += section("数据项（element）", fieldsTable(detail.elements));
+    if (detail.elements && detail.elements.length) html += section("数据项（element）", fieldsTable(detail.elements, IO_COLS));
     if (detail.enum_values && detail.enum_values.length)
-      html += section("枚举值", fieldsTable(detail.enum_values, ["raw_id", "value", "longname", "description"]));
+      html += section("枚举值", fieldsTable(detail.enum_values, ENUM_COLS));
   }
   return html;
 }

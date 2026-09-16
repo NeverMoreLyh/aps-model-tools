@@ -552,6 +552,7 @@ function showDdlDialog(node) {
       } else {
         output.textContent = "未生成任何 DDL。";
       }
+      renderDdlValidation(output, payload.validation);
     } catch (error) {
       output.className = "ddl-empty";
       output.textContent = `生成失败：${error.message}`;
@@ -562,6 +563,23 @@ function showDdlDialog(node) {
     copyBtn.textContent = "已复制 ✓";
     setTimeout(() => { copyBtn.textContent = "复制 DDL"; }, 1500);
   });
+}
+
+function renderDdlValidation(output, validation) {
+  output.parentElement.querySelectorAll(".ddl-note,.ddl-valid,.ddl-invalid").forEach((el) => el.remove());
+  const note = document.createElement("div");
+  if (!validation || (!validation.available && !validation.hint)) return;
+  if (!validation.available) {
+    note.className = "ddl-note";
+    note.textContent = `ℹ ${validation.hint || "SQL 校验不可用"}`;
+  } else if (validation.valid) {
+    note.className = "ddl-valid";
+    note.textContent = `✓ sqlglot 校验通过（解析到 ${validation.statements} 条 CREATE TABLE）`;
+  } else {
+    note.className = "ddl-invalid";
+    note.textContent = `✕ sqlglot 校验未通过：${(validation.errors || []).join("；")}`;
+  }
+  output.after(note);
 }
 
 function treeHtml(children) {
@@ -684,7 +702,6 @@ async function init() {
   renderNav();
   initLayoutControls();
   $("#btn-search").addEventListener("click", () => { state.page = 1; runSearch(); });
-  $("#btn-clear").addEventListener("click", () => { $("#query").value = ""; state.page = 1; runSearch(); });
   $("#query").addEventListener("keydown", (event) => { if (event.key === "Enter") { state.page = 1; runSearch(); } });
   $("#btn-prev").addEventListener("click", () => { if (state.page > 1) { state.page -= 1; runSearch(); } });
   $("#btn-next").addEventListener("click", () => { state.page += 1; runSearch(); });

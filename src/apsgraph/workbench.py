@@ -237,6 +237,44 @@ def top_groups(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
     return [{"kind": row["kind"], "count": row["total"]} for row in rows]
 
 
+DDL_DIALECTS = {"mysql": "mysql", "oracle": "oracle", "postgresql": "postgres"}
+
+
+def validate_ddl_sql(sql: str, dialect: str) -> Dict[str, Any]:
+    """Validate generated DDL with sqlglot (optional dependency).
+
+    Mirrors the db-diff pattern: sqlglot is imported lazily so the core CLI
+    keeps zero mandatory third-party dependencies.  When it is not installed
+    the validation is reported as skipped instead of failing.
+    """
+    if dialect not in DDL_DIALECTS:
+        raise ValueError(f"unsupported dialect: {dialect}")
+    if not sql or not sql.strip():
+        return {"available": False, "valid": None, "errors": [], "statements": 0,
+                "hint": "未生成 DDL，跳过校验"}
+    try:
+        import sqlglot
+        from sqlglot.errors import ParseError
+    except ImportError:
+        return {"available": False, "valid": None, "errors": [], "statements": 0,
+                "hint": "可选依赖 sqlglot 未安装，跳过 SQL 校验（pip install sqlglot）"}
+    try:
+        statements = [stmt for stmt in sqlglot.parse(sql, read=DDL_DIALECTS[dialect])
+                      if stmt is not None]
+    except ParseError as exc:
+        return {"available": True, "valid": False, "errors": [str(exc)], "statements": 0,
+                "hint": ""}
+    # ddl-gen legitimately emits create/alter/index plus sequence seed
+    # insert/delete statements; any successful dialect parse is valid SQL.
+    create_tables = sum(1 for stmt in statements if getattr(stmt, "key", "") == "create")
+    if create_tables == 0:
+        return {"available": True, "valid": False,
+                "errors": ["no CREATE TABLE statement found in generated DDL"],
+                "statements": 0, "hint": ""}
+    return {"available": True, "valid": True, "errors": [],
+            "statements": create_tables, "hint": ""}
+
+
 def _resolve_node_row(conn: sqlite3.Connection, node_ref: str) -> sqlite3.Row:
     """Resolve a node by stable_id, or by exact full_id/raw_id as fallback."""
     row = conn.execute(NODE_SELECT + " where n.stable_id=?", (node_ref,)).fetchone()
@@ -566,7 +604,8 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
                 raise ValueError(f"DDL preview is only available for TABLE nodes: {node_ref}")
             report = generate_all_ddl(conn, DdlGenConfig(dialect=dialect), [node_ref])
             return {"dialect": dialect, "sql": report.sql,
-                    "warnings": report.warnings, "errors": report.errors}
+                    "warnings": report.warnings, "errors": report.errors,
+                    "validation": validate_ddl_sql(report.sql, dialect)}
         finally:
             conn.close()
 

@@ -17,6 +17,7 @@ from apsgraph.workbench import (
     search_group,
     serve_workbench,
     top_groups,
+    validate_ddl_sql,
 )
 
 
@@ -378,6 +379,12 @@ class WorkbenchHttpTest(WorkbenchTestBase):
             payload = json.loads(body)
             self.assertEqual(dialect, payload["dialect"])
             self.assertIn("create", payload["sql"].lower())
+            self.assertIn("validation", payload)
+            try:
+                import sqlglot  # noqa: F401
+                self.assertTrue(payload["validation"]["valid"])
+            except ImportError:
+                self.assertFalse(payload["validation"]["available"])
         status, body = self._get("/api/ddl?id=demo_user&dialect=db2")
         self.assertEqual(400, status)
         status, body = self._get(f"/api/ddl?id={urllib.request.quote('DemoSvc.openAccount')}&dialect=mysql")
@@ -389,6 +396,28 @@ class WorkbenchHttpTest(WorkbenchTestBase):
         self.assertEqual(400, status)
         status, _ = self._get("/api/search?group=table", method="POST")
         self.assertEqual(405, status)
+
+    def test_ddl_validation_with_sqlglot(self):
+        try:
+            import sqlglot  # noqa: F401
+        except ImportError:
+            self.skipTest("sqlglot optional dependency not installed")
+        result = validate_ddl_sql("create table demo (id varchar(10) not null);", "mysql")
+        self.assertTrue(result["available"])
+        self.assertTrue(result["valid"])
+        self.assertEqual(1, result["statements"])
+
+        bad = validate_ddl_sql("create table demo (id varchar(10)", "mysql")
+        self.assertTrue(bad["available"])
+        self.assertFalse(bad["valid"])
+        self.assertTrue(bad["errors"])
+
+        skipped = validate_ddl_sql("  ", "mysql")
+        self.assertFalse(skipped["available"])
+        self.assertIsNone(skipped["valid"])
+
+        with self.assertRaises(ValueError):
+            validate_ddl_sql("select 1", "db2")
 
     def test_serve_workbench_rejects_missing_db(self):
         with self.assertRaises(FileNotFoundError):

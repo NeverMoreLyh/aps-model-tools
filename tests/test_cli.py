@@ -181,7 +181,10 @@ class CliTest(unittest.TestCase):
                 cli_module.build_parser().parse_args(["workbench", "--port", bad])
             self.assertEqual(2, context.exception.code)
         args = cli_module.build_parser().parse_args(["workbench", "--port", "0"])
-        self.assertEqual(0, args.port)  # 0 = 随机空闲端口
+        self.assertEqual(0, args.port)
+        # 默认即为随机空闲端口
+        args = cli_module.build_parser().parse_args(["workbench"])
+        self.assertEqual(0, args.port)
 
     def test_workbench_list_and_close_argument_rules(self):
         registry = Path(self.tmp.name) / "wb-registry.json"

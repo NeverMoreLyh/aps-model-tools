@@ -25,7 +25,7 @@ from .scanner import (
 )
 from .search_scope import SearchScope
 from .store import connect, find_nodes, get_stats, references, search_nodes
-from .workbench import WORKBENCH_PORT, close_workbenches, list_workbenches, serve_workbench
+from .workbench import close_workbenches, list_workbenches, serve_workbench
 from .xlsx_export import ExcelExportReport, export_excel
 
 
@@ -295,9 +295,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="serve the read-only SQLite metadata query workbench at 127.0.0.1 and open it in a browser")
     workbench.add_argument("--db", type=Path, default=DEFAULT_DB,
                            help="SQLite metadata index (default: .apsgraph/apsgraph.db)")
-    workbench.add_argument("--port", type=_port_number, default=WORKBENCH_PORT,
-                           help=f"local port to bind on 127.0.0.1; 0 picks a random free port "
-                                f"(default: {WORKBENCH_PORT})")
+    workbench.add_argument("--port", type=_port_number, default=0,
+                           help="local port to bind on 127.0.0.1; defaults to a "
+                                "random free port (0)")
     workbench.add_argument("--no-browser", action="store_true",
                            help="do not open the default browser automatically")
     workbench_subs = workbench.add_subparsers(dest="wb_command")

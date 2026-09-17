@@ -99,12 +99,12 @@ apsgraph options               # 版本、默认值、生效的工作区规则
 ## 工作台（workbench）
 
 ```bash
-apsgraph workbench                       # http://127.0.0.1:8321/ 并自动打开浏览器
-apsgraph workbench --port 0              # 随机空闲端口 —— 可同时启动多个
-apsgraph workbench --db /other/.apsgraph/apsgraph.db --port 0 --no-browser
+apsgraph workbench                       # 127.0.0.1 上的随机空闲端口，并自动打开浏览器
+apsgraph workbench --port 8321           # 需要稳定 URL 时显式指定固定端口
+apsgraph workbench --db /other/.apsgraph/apsgraph.db --no-browser
 ```
 
-服务器只绑定 `127.0.0.1` 并以只读模式打开索引，因此可以安全地为每个工作区各保留一个 workbench。`--port 0` 由操作系统分配空闲端口，实际 URL 会输出到 stderr 并记录进实例注册表。
+服务器只绑定 `127.0.0.1` 并以只读模式打开索引，因此可以安全地为每个工作区各保留一个 workbench。每个实例默认由操作系统分配随机空闲端口，实际 URL 会输出到 stderr 并记录进实例注册表；显式指定的端口不可绑定时直接报错，不会被静默共用。
 
 ```bash
 apsgraph workbench list                  # 列出运行中实例，过期条目自动清理

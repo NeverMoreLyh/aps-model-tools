@@ -99,12 +99,12 @@ apsgraph options               # version, defaults, effective workspace rules
 ## Workbench
 
 ```bash
-apsgraph workbench                       # http://127.0.0.1:8321/ + auto browser
-apsgraph workbench --port 0              # random free port — run several at once
-apsgraph workbench --db /other/.apsgraph/apsgraph.db --port 0 --no-browser
+apsgraph workbench                       # random free port on 127.0.0.1 + auto browser
+apsgraph workbench --port 8321           # fixed port if you prefer a stable URL
+apsgraph workbench --db /other/.apsgraph/apsgraph.db --no-browser
 ```
 
-Because the server binds `127.0.0.1` only and opens the index read-only, you can safely keep one workbench per workspace. With `--port 0` the operating system picks a free port; the effective URL is printed to stderr and recorded in the registry.
+Because the server binds `127.0.0.1` only and opens the index read-only, you can safely keep one workbench per workspace. Each instance binds a random free port by default; the effective URL is printed to stderr and recorded in the registry, and an explicitly requested port that is unavailable fails with an error instead of being silently shared.
 
 ```bash
 apsgraph workbench list                  # running instances, stale entries pruned

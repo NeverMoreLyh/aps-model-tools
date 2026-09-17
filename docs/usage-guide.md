@@ -1,6 +1,6 @@
 # APSGraph 使用说明
 
-> 版本：0.38.0
+> 版本：0.39.0
 > 更新时间：2026-09-17
 > 项目地址：https://github.com/NeverMoreLyh/aps-model-tools
 
@@ -96,7 +96,7 @@ apsgraph --help
 | `doc-export` | 导出 Markdown 模型文档 |
 | `xlsx-export` | 导出 Excel 模型文档 |
 | `serve-mcp` | 以 stdio MCP 服务暴露元数据工具 |
-| `workbench` | 启动本地浏览器查询工作台（只读，127.0.0.1；`--port 0` 随机端口） |
+| `workbench` | 启动本地浏览器查询工作台（只读，127.0.0.1；默认随机空闲端口） |
 | `workbench list` | 列出正在运行的 workbench 实例（端口、PID、工作区、索引） |
 | `workbench close` | 按端口或全部停止运行中的 workbench 实例 |
 
@@ -453,16 +453,15 @@ python3 scripts/verify_mcp.py \
 对已扫描的工作区启动本地 Web 查询工作台：
 
 ```bash
-apsgraph workbench                          # 默认 127.0.0.1:8321 并自动打开浏览器
+apsgraph workbench                          # 默认绑定一个随机空闲端口并自动打开浏览器
 apsgraph workbench --db /path/to/.apsgraph/apsgraph.db
-apsgraph workbench --port 9000 --no-browser
-apsgraph workbench --port 0                 # 随机绑定一个空闲端口，可同时启动多个工作区
+apsgraph workbench --port 8321 --no-browser # 需要固定端口时显式指定
 ```
 
 - 纯标准库实现，索引以只读模式打开，服务器只绑定 `127.0.0.1`，无任何写操作。
 - 索引不存在时命令报错并提示先执行 `apsgraph scan`；运行日志输出到 stderr。
-- `--port 0` 表示由操作系统分配一个随机空闲端口；实际端口以启动日志中的 URL 为准。
-- 端口被占用时报错退出（不自动降级换端口），可用 `--port 0` 或显式指定其他端口。
+- 端口默认由操作系统分配随机空闲端口（多实例互不冲突）；实际端口以启动日志中的 URL 为准，需要稳定 URL 时用 `--port` 显式指定。
+- 显式指定的端口被占用时报错退出（不自动降级换端口；Windows 上已禁用 SO_REUSEADDR 的重复绑定，不会出现两个实例静默共用同一端口）。
 
 多实例管理与实例注册表：
 

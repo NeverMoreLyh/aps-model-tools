@@ -1,6 +1,6 @@
 # APSGraph 运维说明文档
 
-> 版本：0.38.0
+> 版本：0.39.0
 > 更新时间：2026-09-17
 > 文档定位：说明安装发布、索引巡检、故障处理、备份回滚和 CI 使用。
 
@@ -95,7 +95,7 @@ apsgraph sync --workspace /path/to/workspace
 
 ### 6.4 workbench 启动失败
 
-报 `index database does not exist` 时先对目标工作区执行 `apsgraph scan`，或用 `--db` 指向正确索引。报端口占用时用 `--port 0` 改为随机空闲端口（或显式换端口），命令不会自动降级换端口；`--no-browser` 可在无桌面环境的 CI/远程主机上只打印 URL 不拉起浏览器。
+报 `index database does not exist` 时先对目标工作区执行 `apsgraph scan`，或用 `--db` 指向正确索引。默认即绑定随机空闲端口，多实例互不冲突；显式 `--port N` 指定的端口被占用时报错退出（不会自动降级换端口）；`--no-browser` 可在无桌面环境的 CI/远程主机上只打印 URL 不拉起浏览器。
 
 需要同时打开多个工作区时，为每个工作区分别执行 `apsgraph workbench --port 0`，然后用 `apsgraph workbench list` 查看全部实例（端口、PID、工作区），用 `apsgraph workbench close --port N`（或 `--all`）关闭；该命令读取用户级注册表 `~/.apsgraph/workbench-registry.json`（可用 `APSGRAPH_WORKBENCH_REGISTRY` 覆盖），过期条目（进程已退出）会在 list 时自动清理。若怀疑注册表条目过期，直接重新执行 `workbench list` 即可自愈，无需手工编辑该文件。
 

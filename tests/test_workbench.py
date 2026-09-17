@@ -623,6 +623,12 @@ class WorkbenchHttpTest(WorkbenchTestBase):
         with self.assertRaises(ValueError):
             validate_ddl_sql("select 1", "db2")
 
+    def test_second_bind_on_same_port_fails_closed(self):
+        # 回归：Windows 的 SO_REUSEADDR 曾允许两个实例同时"成功"绑定同一端口
+        # 且不报任何冲突；重复绑定必须报错（fail-closed）
+        with self.assertRaises(ValueError):
+            _bind_workbench_server(self.db, self.server.server_port)
+
     def test_serve_workbench_rejects_missing_db(self):
         with self.assertRaises(FileNotFoundError):
             serve_workbench(self.root / "nope.db", open_browser=False)

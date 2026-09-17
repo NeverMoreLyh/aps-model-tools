@@ -1,6 +1,6 @@
 # APSGraph 需求文档
 
-> 版本：0.38.0
+> 版本：0.39.0
 > 更新时间：2026-09-17  
 > 文档定位：本文件是 APSGraph 的长期需求基线，汇总产品定位、用户需求、功能需求、非功能需求与演进需求。新增需求必须先更新本文，再进入设计与实现。
 
@@ -94,7 +94,7 @@ APSGraph 不修改业务源码，不执行 DDL，不写入 CodeGraph 数据库�
 ### R19 查询工作台
 
 - `workbench` 在本地浏览器提供元数据查询工作台：只读、仅绑定 `127.0.0.1`、纯标准库实现、不依赖第三方运行时库。
-- 支持同时启动多个工作区的 workbench 实例：`--port 0` 由操作系统分配随机空闲端口，实际端口在启动日志 URL 中展示并记录到实例注册表。
+- 支持同时启动多个工作区的 workbench 实例：默认由操作系统分配随机空闲端口（等价 `--port 0`），实际端口在启动日志 URL 中展示并记录到实例注册表；`--port N` 显式指定固定端口，端口不可绑定时必须报错（Windows 禁用 `SO_REUSEADDR` 重复绑定同一活动端口）。
 - 提供跨工作区的实例管理命令：`workbench list` 列出正在运行的实例（端口、PID、URL、索引、工作区、启动时间，自动清理过期条目），`workbench close --port N | --all` 停止指定或全部实例；实例注册表位于用户主目录（`~/.apsgraph/workbench-registry.json`，可用 `APSGRAPH_WORKBENCH_REGISTRY` 覆盖），close 只终止仍在响应 workbench API 的进程，不得误杀无关进程。
 - 支持按顶层模型查询并展示递归包含的子模型树（懒加载）；支持表、服务文件（SERVICE_TYPE）、服务（SERVICE_OPERATION，按 `服务文件.服务id` 维度搜索）、交易、批量交易、文件批量（FILE_BATCH_TRANSACTION）、命名SQL文件（SQL_GROUP，详情展示语句列表）、命名SQL（NAMED_SQL，粒度 `ApBatchFileSqls.upd_tb_file_tran_req`，详情展示 parameter 参数与按数据库类型区分的 SQL 语句文本（动态SQL按 MyBatis mapper 机制原样展示 `<dynamicSql>` 原始 XML 节点；无 type 的默认为 NONE 并置顶））、分片（SHARDINGSTRATEGY，详情展示分片策略）、复合类型、数据字典（仅字典文件 `.d_schema.xml` 中 DICTIONARY 下的 element，粒度 `BpDict.B.btch_grp_num`，不含复合类型的 element）、错误码（kind ERROR，粒度 `GnError.Genl.E0001`；fullId 维度支持按 `.` 分段层级筛选）、枚举类型、基础类型、错误码文件、常量（`.constant.xml` 中 constantConf>constants>constant，粒度 `CfConst.Busi.CONST_XXX`，支持按 message/description 模糊搜索）的独立查询页；基础类型页查询 `.u_schema.xml` 中定义的 RESTRICTION_TYPE（如 `ApBaseType.U_ADDR`），详情展示属性与枚举值。
 - 枚举类型页为主从布局：列表展示枚举 FullId 与枚举值数量，详情展示枚举值明细。

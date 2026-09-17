@@ -29,6 +29,7 @@ from .store import (
     NODE_SELECT, _row_to_dict, connect, find_nodes, get_stats, references,
 )
 
+# 历史默认端口；CLI 默认改为随机空闲端口，需要固定端口时用 --port 8321 显式指定
 WORKBENCH_PORT = 8321
 PAGE_SIZE = 50
 MAX_PAGE_SIZE = 500
@@ -895,6 +896,11 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
 
 class WorkbenchServer(ThreadingHTTPServer):
     daemon_threads = True
+    # http.server 默认 allow_reuse_address=1（SO_REUSEADDR）。Windows 的
+    # SO_REUSEADDR 允许重复绑定同一活动端口：两个 workbench 都会"成功"监听
+    # 8321 且不报任何冲突，请求被随机分流。POSIX 上该选项只用于快速重启绕过
+    # TIME_WAIT，因此仅在非 Windows 平台保留。
+    allow_reuse_address = os.name != "nt"
 
     def __init__(self, db_path: Path, port: int = WORKBENCH_PORT):
         super().__init__(("127.0.0.1", port), WorkbenchHandler)
@@ -1126,13 +1132,14 @@ def _serve_workbench_server(server: WorkbenchServer, db_path: Path,
     return 0
 
 
-def serve_workbench(db_path: Path, port: int = WORKBENCH_PORT,
+def serve_workbench(db_path: Path, port: int = 0,
                     open_browser: bool = True, progress=None) -> int:
     """Start the local workbench server; blocks until interrupted.
 
-    ``port`` 0 binds a random free port, allowing several workspaces to be
-    served at the same time; the effective port is reported in the URL and
-    recorded in the instance registry.
+    ``port`` defaults to 0 — the OS assigns a random free port so several
+    workspaces can be served at the same time; the effective port is reported
+    in the URL and recorded in the instance registry.  Pass an explicit port
+    (e.g. ``WORKBENCH_PORT``) for a fixed address.
     """
     db_path = Path(db_path)
     server = _bind_workbench_server(db_path, port)

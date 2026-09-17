@@ -12,7 +12,7 @@ Read-only APS metadata analysis toolkit: scan APS XML models into a compact SQLi
 
 | Area | Capabilities |
 |---|---|
-| Indexing | Full scan (`scan`) and incremental sync (`sync`) of APS XML models (tables, dictionaries, enums, services, transactions, batches, named SQL, sharding, error codes, constants, base types) into SQLite Schema V2 with nodes, edges, FTS5 search index, and raw XML documents |
+| Indexing | Full scan (`scan`) and incremental sync (`sync`) of APS XML models (tables, dictionaries, enums, services, transactions, batches, named SQL, sharding, error codes, constants, base types) into SQLite Schema V2 with semantic nodes, reference edges, and an FTS5 search index (raw XML is never stored; XML fragments are read on demand from source files) |
 | Query & analysis | Exact find, fuzzy search (id/fullId/Chinese name/description), reference graphs (`refs`), reverse impact analysis (`impact`), workspace status and index statistics |
 | DDL | Single-table DDL preview (`ddl`), full MySQL/Oracle/PostgreSQL DDL generation (`ddl-gen`), model-vs-live-database schema diff (`db-diff`, DSN or offline JSON) |
 | Documentation | Markdown export (`doc-export`) and project-aggregated Excel export (`xlsx-export`, optional `openpyxl`) |
@@ -30,7 +30,7 @@ APS workspace (XML models)          read-only
 │  scanner              │ ──────────────▶ │  SQLite index (Schema V2)   │
 │  discover → parse →   │                 │  model_files · nodes ·      │
 │  resolve references   │                 │  edges · model_search(FTS5) │
-└───────────────────────┘                 │  xml_documents · scan_state │
+└───────────────────────┘                 │  scan_state                 │
                                           └──────────────┬──────────────┘
         ┌────────────────────────────────────────────────┼──────────────┐
         ▼                ▼               ▼               ▼              ▼
@@ -112,7 +112,7 @@ apsgraph workbench close --port 8321     # stop one instance
 apsgraph workbench close --all           # stop every instance of this user
 ```
 
-The UI provides a dashboard with per-page record counts, per-kind query pages (tables, services, transactions, batches, named SQL, dictionaries, enums, base types, error codes, constants, sharding, parse failures), structured detail views with input/output fields, common-field tables, flow-orchestration charts (offline mermaid), unresolved-reference highlighting, original XML fragments, and per-table MySQL/Oracle/PostgreSQL DDL preview with optional sqlglot validation.
+The UI provides a dashboard with per-page record counts, per-kind query pages (tables, services, transactions, batches, named SQL, dictionaries, enums, base types, error codes, constants, sharding, parse failures), structured detail views with input/output fields, common-field tables, flow-orchestration charts (offline mermaid), unresolved-reference highlighting, original XML fragments (read on demand from source files, never stored in the index), and per-table MySQL/Oracle/PostgreSQL DDL preview with optional sqlglot validation.
 
 ## Safety boundaries
 

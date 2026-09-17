@@ -12,7 +12,7 @@
 
 | 领域 | 能力 |
 |---|---|
-| 索引 | 全量扫描（`scan`）与增量同步（`sync`）APS XML 模型（表、字典、枚举、服务、交易、批量、命名SQL、分片、错误码、常量、基础类型），写入 SQLite Schema V2（节点、边、FTS5 搜索索引、原始 XML 文档） |
+| 索引 | 全量扫描（`scan`）与增量同步（`sync`）APS XML 模型（表、字典、枚举、服务、交易、批量、命名SQL、分片、错误码、常量、基础类型），写入 SQLite Schema V2（语义节点、关系边、FTS5 搜索索引；不存原始 XML，XML 片段按需从源文件读取） |
 | 查询与分析 | 精确查找、模糊搜索（id/fullId/中文名/描述）、引用关系图（`refs`）、反向影响分析（`impact`）、工作区状态与索引统计 |
 | DDL | 单表 DDL 预览（`ddl`）、MySQL/Oracle/PostgreSQL 全量 DDL 生成（`ddl-gen`）、模型与实际数据库 schema 差异对比（`db-diff`，支持 DSN 或离线 JSON） |
 | 文档导出 | Markdown 导出（`doc-export`）与按项目聚合的 Excel 导出（`xlsx-export`，可选 `openpyxl`） |
@@ -30,7 +30,7 @@ APS 工作区（XML 模型）                只读
 │  scanner 扫描器        │ ────────────▶ │  SQLite 索引（Schema V2）    │
 │  发现 → 解析 →         │               │  model_files · nodes ·      │
 │  引用解析              │               │  edges · model_search(FTS5) │
-└───────────────────────┘               │  xml_documents · scan_state │
+└───────────────────────┘               │  scan_state                 │
                                         └──────────────┬──────────────┘
         ┌───────────────────────────────────────────────┼──────────────┐
         ▼                ▼               ▼              ▼              ▼
@@ -112,7 +112,7 @@ apsgraph workbench close --port 8321     # 停止一个实例
 apsgraph workbench close --all           # 停止当前用户的全部实例
 ```
 
-界面提供：总览页（各页面记录数卡片）、分类型查询页（表、服务、交易、批量、命名SQL、数据字典、枚举、基础类型、错误码、常量、分片、解析失败）、结构化详情（输入输出字段、公共字段表、流程编排图（离线 mermaid）、未解析引用高亮、原始 XML 片段），以及按表的 MySQL/Oracle/PostgreSQL DDL 预览（可选 sqlglot 校验）。
+界面提供：总览页（各页面记录数卡片）、分类型查询页（表、服务、交易、批量、命名SQL、数据字典、枚举、基础类型、错误码、常量、分片、解析失败）、结构化详情（输入输出字段、公共字段表、流程编排图（离线 mermaid）、未解析引用高亮、原始 XML 片段（按需从源文件读取、不写入索引）），以及按表的 MySQL/Oracle/PostgreSQL DDL 预览（可选 sqlglot 校验）。
 
 ## 安全边界
 

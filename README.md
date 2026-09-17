@@ -1,5 +1,127 @@
 # APSGraph
 
+English | [简体中文](README.zh-CN.md)
+
+Read-only APS metadata analysis toolkit: scan APS XML models into a compact SQLite relationship index, then query, analyze, generate DDL, diff against live databases, export documentation, bridge to generated Java/CodeGraph, and browse everything in a local web workbench.
+
+- **Read-only by design** — business repositories, CodeGraph databases, and generated DDL are never modified or executed.
+- **Zero mandatory runtime dependencies** — the core CLI runs on Python 3.9+ with the standard library only.
+- **Machine-friendly** — every command emits JSON on stdout; human-facing logs go to stderr.
+
+## Features
+
+| Area | Capabilities |
+|---|---|
+| Indexing | Full scan (`scan`) and incremental sync (`sync`) of APS XML models (tables, dictionaries, enums, services, transactions, batches, named SQL, sharding, error codes, constants, base types) into SQLite Schema V2 with nodes, edges, FTS5 search index, and raw XML documents |
+| Query & analysis | Exact find, fuzzy search (id/fullId/Chinese name/description), reference graphs (`refs`), reverse impact analysis (`impact`), workspace status and index statistics |
+| DDL | Single-table DDL preview (`ddl`), full MySQL/Oracle/PostgreSQL DDL generation (`ddl-gen`), model-vs-live-database schema diff (`db-diff`, DSN or offline JSON) |
+| Documentation | Markdown export (`doc-export`) and project-aggregated Excel export (`xlsx-export`, optional `openpyxl`) |
+| Bridge & audit | Map APS models to generated Java symbols and CodeGraph consumers (`bridge`); heuristic functional-capability classification of models and Java packages (`classify`) |
+| MCP | Expose the metadata graph as stdio MCP tools for AI clients (`serve-mcp`) |
+| Workbench | Local read-only web UI over the index (`workbench`): dashboard, per-kind query pages, structured detail views, flow charts, DDL preview; multi-instance support with random ports and `list`/`close` commands |
+
+## Architecture
+
+```text
+APS workspace (XML models)          read-only
+        │
+        ▼
+┌───────────────────────┐   scan / sync   ┌─────────────────────────────┐
+│  scanner              │ ──────────────▶ │  SQLite index (Schema V2)   │
+│  discover → parse →   │                 │  model_files · nodes ·      │
+│  resolve references   │                 │  edges · model_search(FTS5) │
+└───────────────────────┘                 │  xml_documents · scan_state │
+                                          └──────────────┬──────────────┘
+        ┌────────────────────────────────────────────────┼──────────────┐
+        ▼                ▼               ▼               ▼              ▼
+   CLI commands      MCP (stdio)    Web workbench    DDL/db-diff     docs export
+   search/find/refs  search, find,  127.0.0.1 only,  ddlgen rules    markdown /
+   impact/bridge…    impact, source read-only, GET    + validation    xlsx
+```
+
+- **scanner** (`scanner.py`) — discovers recognized APS XML files, parses them into semantic nodes and relations, resolves cross-file references, and supports merging external APS indexes (`--external-db`). Writes are restricted to the dedicated index path.
+- **store** (`store.py`) — read-only connection helpers and the Schema V2 data model: files, nodes (with stable ids), edges, FTS5 search, and scan state.
+- **Query layer** (`search_scope.py`, `impact.py`) — scoped exact/fuzzy search and recursive reverse-impact traversal.
+- **Generators/analyzers** (`ddlgen.py`, `dbdiff.py`, `bridge.py`, `classification.py`) — DDL rules per dialect, schema diffing with ERROR/WARNING verdicts, Java/CodeGraph bridging with explicit evidence, capability classification.
+- **Surfaces** (`cli.py`, `mcp_server.py`, `workbench.py` + `workbench_static/`) — the CLI, a stdio MCP server, and a self-contained local web UI (vanilla JS, mermaid bundled for offline use).
+- **Workbench instance registry** — each workbench records `{port, pid, url, db, workspace, started_at}` in `~/.apsgraph/workbench-registry.json` so instances from different folders can be listed and closed from anywhere (override with `APSGRAPH_WORKBENCH_REGISTRY`).
+
+## Install
+
+```bash
+# Core CLI (standard library only)
+pip install .
+
+# Include Excel export
+pip install ".[excel]"
+
+# Development install with Excel export
+pip install -e ".[excel]"
+```
+
+Optional dependencies: `sqlglot` (SQL validation for `db-diff` and workbench DDL preview), `openpyxl` (Excel export).
+
+## Quick start
+
+```bash
+cd /path/to/aps-workspace      # APS model workspace root
+apsgraph scan                  # build the index at .apsgraph/apsgraph.db
+apsgraph sync                  # incrementally apply source changes
+apsgraph status                # workspace/index drift report
+apsgraph stats                 # index statistics (JSON)
+apsgraph options               # version, defaults, effective workspace rules
+```
+
+## Command reference
+
+| Command | Purpose |
+|---|---|
+| `options` | Show version, default options, and effective workspace rules |
+| `scan` | Full (re)build of the SQLite index from workspace XML |
+| `sync` | Incremental sync by relative path + SHA-256; rebinds references |
+| `status` | Report added/modified/deleted models vs the index |
+| `stats` | Index statistics as JSON |
+| `show` / `find` / `search` | Exact node detail; exact id search; fuzzy FTS5 search |
+| `refs` | Incoming/outgoing reference graph with depth |
+| `impact` | Reverse dependency impact report |
+| `ddl` | Single-table DDL preview (experimental subset, never executed) |
+| `ddl-gen` | Generate MySQL/Oracle/PostgreSQL DDL for all or selected tables |
+| `db-diff` | Compare model schema against a live DB (DSN) or a JSON export |
+| `bridge` | Map models to generated Java and CodeGraph consumers |
+| `classify` | Heuristic capability audit of models and Java packages |
+| `doc-export` | Export model documentation as Markdown |
+| `xlsx-export` | Export model documentation as Excel files per project |
+| `serve-mcp` | Serve the metadata graph as a stdio MCP server |
+| `workbench` | Serve the read-only local web workbench and open a browser |
+| `workbench list` | List running workbench instances (port, PID, workspace, index) |
+| `workbench close` | Stop instances by `--port N` or `--all` |
+
+## Workbench
+
+```bash
+apsgraph workbench                       # http://127.0.0.1:8321/ + auto browser
+apsgraph workbench --port 0              # random free port — run several at once
+apsgraph workbench --db /other/.apsgraph/apsgraph.db --port 0 --no-browser
+```
+
+Because the server binds `127.0.0.1` only and opens the index read-only, you can safely keep one workbench per workspace. With `--port 0` the operating system picks a free port; the effective URL is printed to stderr and recorded in the registry.
+
+```bash
+apsgraph workbench list                  # running instances, stale entries pruned
+apsgraph workbench close --port 8321     # stop one instance
+apsgraph workbench close --all           # stop every instance of this user
+```
+
+The UI provides a dashboard with per-page record counts, per-kind query pages (tables, services, transactions, batches, named SQL, dictionaries, enums, base types, error codes, constants, sharding, parse failures), structured detail views with input/output fields, common-field tables, flow-orchestration charts (offline mermaid), unresolved-reference highlighting, original XML fragments, and per-table MySQL/Oracle/PostgreSQL DDL preview with optional sqlglot validation.
+
+## Safety boundaries
+
+- Business source repositories are only ever read; the index lives under the workspace's `.apsgraph/` directory (or an explicit `--db`).
+- The workbench binds `127.0.0.1`, is GET-only, and opens SQLite in read-only mode; non-GET requests get `405`.
+- Generated DDL is printed or written to files — never executed.
+- CodeGraph databases are opened immutably; Maven builds and JDK selection are out of scope.
+- Unresolved model references stay warnings; index replacement is fail-closed on parse errors (`--fail-on-parse-error`), legacy schemas, and foreign workspaces.
+
 ## Documentation map
 
 | Document | Purpose |
@@ -13,107 +135,4 @@
 | [DDL rules](docs/ddl-generation-rules.md) | Dialect-specific DDL generation rules |
 | [APS 元模型规则](docs/aps-metamodel-rules.md) | 核心概念、UML、顶层/普通模型、XML 规则与 Demo |
 | [APS 类型/数据库映射](docs/aps-type-database-mapping.md) | 基础类型递归解析与 MySQL/Oracle/PostgreSQL 列类型规则 |
-
-Read-only APS metadata scanner, compact SQLite relationship index, FTS5 fuzzy model search, incremental sync, model-to-CodeGraph bridge, capability classification report, impact query, and Table-to-MySQL-DDL preview.
-
-## Install as a command
-
-```bash
-# Core CLI (standard library only)
-pip install .
-
-# Include Excel export
-pip install ".[excel]"
-
-# Development install with Excel export
-pip install -e ".[excel]"
-```
-
-This installs the `apsgraph` command. Dependencies are declared in `pyproject.toml`; a separate `requirements.txt` is not required for normal installation.
-
-## Default paths
-
-Run `apsgraph` from the APS workspace root whenever possible:
-
-- Default workspace: current directory
-- Default index: `.apsgraph/apsgraph.db`
-
-```bash
-cd /path/to/v8.7-all
-apsgraph scan
-apsgraph sync
-apsgraph status
-apsgraph stats
-```
-
-Use `apsgraph --version` for the installed version. To inspect that version's default options and the effective rules in `.apsgraph.json`:
-
-```bash
-apsgraph options
-```
-
-## XML indexing
-
-APSGraph only reads recognized APS XML files from the workspace and writes their
-semantic nodes and relationships to SQLite. It does not invoke Maven, select a
-JDK, modify business source repositories, or execute generated DDL.
-
-```bash
-apsgraph scan
-apsgraph sync
-apsgraph scan --external-db /path/to/shared-index/.apsgraph/apsgraph.db
-```
-
-Unresolved model references remain warnings.
-
-## Build or rebuild the index
-
-```bash
-apsgraph scan
-```
-
-`scan` is a full rebuild and upgrades known APS legacy indexes by rebuilding them as schema V2. It refuses databases containing unrelated tables; use a dedicated index path.
-
-## Incrementally sync source changes
-
-```bash
-apsgraph sync
-```
-
-`sync` compares normalized relative paths and SHA-256 hashes, applies added/modified/deleted files in one transaction, then rebinds cross-file references. It refuses legacy schema files and indexes owned by another workspace.
-
-## Query and preview DDL
-
-```bash
-apsgraph stats
-apsgraph show SysDbTable.kapp_sundry_busi
-apsgraph search "账户类型"
-apsgraph impact BpDict.A.addr
-apsgraph ddl kapp_sundry_busi --dialect mysql
-```
-
-DDL output is a fail-closed experimental subset and is never executed.
-
-## Bridge an APS model to generated Java and CodeGraph consumers
-
-
-```bash
-cd /path/to/v8.7-all/ap-parent
-mvn generate-sources
-```
-
-Then run the bridge from the workspace root:
-
-```bash
-apsgraph bridge SysParmTable.kapb_txn_log --codegraph ap-parent=/path/to/v8.7-all/ap-parent/.codegraph/codegraph.db --output .apsgraph/reports/kapb_txn_log-bridge.json
-```
-
-The bridge verifies `target/gen` directly using package, generated symbol, and `@ConfigType` evidence, then reads CodeGraph SQLite in immutable read-only mode to find indexed Java consumers. It never writes CodeGraph's private database. Coverage is explicit: repositories without a CodeGraph index are reported as gaps, and dynamic/runtime references remain out of scope.
-
-## Audit model and Java package capability grouping
-
-```bash
-apsgraph classify --output .apsgraph/reports/capability-audit.md --json-output .apsgraph/reports/capability-audit.json
-```
-
-Classification uses model IDs, descriptions, paths, packages, and class names as evidence. It is a heuristic architecture audit, not an automatic rewrite: mixed and unclassified results require owner confirmation before moving models or Java packages.
+| [MCP guide](docs/mcp-guide.md) | MCP server usage with AI clients |

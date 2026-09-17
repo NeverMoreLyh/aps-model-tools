@@ -74,20 +74,23 @@ class ScannerTest(unittest.TestCase):
         self.assertGreaterEqual(summary.edges, 8)
 
         conn = connect(self.db)
-        stats = get_stats(conn)
-        self.assertEqual(4, stats["files"])
-        self.assertEqual(1, stats["parse_failed"])
+        try:
+            stats = get_stats(conn)
+            self.assertEqual(4, stats["files"])
+            self.assertEqual(1, stats["parse_failed"])
 
-        base = find_nodes(conn, "Base.U_NAME")
-        self.assertEqual(1, len(base))
-        incoming = references(conn, base[0]["stable_id"], "in", 1)
-        kinds = {edge["relation_kind"] for edge in incoming["edges"]}
-        self.assertIn("TYPE_REF", kinds)
+            base = find_nodes(conn, "Base.U_NAME")
+            self.assertEqual(1, len(base))
+            incoming = references(conn, base[0]["stable_id"], "in", 1)
+            kinds = {edge["relation_kind"] for edge in incoming["edges"]}
+            self.assertIn("TYPE_REF", kinds)
 
-        dictionary = find_nodes(conn, "DemoDict.A.name")
-        self.assertEqual(1, len(dictionary))
-        dict_incoming = references(conn, dictionary[0]["stable_id"], "in", 1)
-        self.assertIn("DICT_REF", {e["relation_kind"] for e in dict_incoming["edges"]})
+            dictionary = find_nodes(conn, "DemoDict.A.name")
+            self.assertEqual(1, len(dictionary))
+            dict_incoming = references(conn, dictionary[0]["stable_id"], "in", 1)
+            self.assertIn("DICT_REF", {e["relation_kind"] for e in dict_incoming["edges"]})
+        finally:
+            conn.close()
 
     def test_non_top_level_root_full_id_is_not_duplicated(self):
         root = self.root / "err-root"
@@ -199,9 +202,12 @@ class ScannerTest(unittest.TestCase):
         self.assertEqual(first.nodes, second.nodes)
         self.assertEqual(first.edges, second.edges)
         conn = connect(self.db)
-        duplicate_count = conn.execute(
-            "select count(*) from (select stable_id,count(*) c from nodes group by stable_id having c > 1)"
-        ).fetchone()[0]
+        try:
+            duplicate_count = conn.execute(
+                "select count(*) from (select stable_id,count(*) c from nodes group by stable_id having c > 1)"
+            ).fetchone()[0]
+        finally:
+            conn.close()
         self.assertEqual(0, duplicate_count)
 
 

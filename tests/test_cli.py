@@ -4,6 +4,7 @@ import sys
 import json
 import os
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -73,7 +74,7 @@ class CliTest(unittest.TestCase):
         self.assertEqual(str(workspace.resolve()), report["workspace"])
         self.assertEqual({
             "workspace": ".",
-            "database": ".apsgraph/apsgraph.db",
+            "database": str(cli_module.DEFAULT_DB),  # 平台相关分隔符，直接取自默认值
             "external_indexes": [],
         }, report["defaults"])
         self.assertEqual({"external_indexes": []}, report["effective"])
@@ -173,6 +174,69 @@ class CliTest(unittest.TestCase):
             rc = main(["stats", "--db", str(db)])
             self.assertEqual(2, rc)
             self.assertFalse(db.exists())
+
+    def test_workbench_port_argument_validation(self):
+        for bad in ("70000", "-1", "abc"):
+            with self.assertRaises(SystemExit) as context:
+                cli_module.build_parser().parse_args(["workbench", "--port", bad])
+            self.assertEqual(2, context.exception.code)
+        args = cli_module.build_parser().parse_args(["workbench", "--port", "0"])
+        self.assertEqual(0, args.port)  # 0 = 随机空闲端口
+
+    def test_workbench_list_and_close_argument_rules(self):
+        registry = Path(self.tmp.name) / "wb-registry.json"
+        with mock.patch.dict(os.environ, {"APSGRAPH_WORKBENCH_REGISTRY": str(registry)}):
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                rc = main(["workbench", "list"])
+            self.assertEqual(0, rc)
+            self.assertEqual([], json.loads(output.getvalue())["instances"])
+
+            # close 未注册端口 → rc 2 且报告 not_found
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                rc = main(["workbench", "close", "--port", "8321"])
+            self.assertEqual(2, rc)
+            self.assertEqual([8321], json.loads(output.getvalue())["not_found"])
+
+            # close 缺少 --port/--all，或两者同时给出 → rc 2
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                rc = main(["workbench", "close"])
+            self.assertEqual(2, rc)
+            self.assertIn("error", json.loads(output.getvalue()))
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                rc = main(["workbench", "close", "--port", "1", "--all"])
+            self.assertEqual(2, rc)
+            self.assertIn("error", json.loads(output.getvalue()))
+
+    def test_workbench_close_cli_stops_registered_instance(self):
+        from apsgraph.workbench import REGISTRY_ENV, WorkbenchServer, register_workbench
+
+        registry = Path(self.tmp.name) / "wb-registry.json"
+        server = WorkbenchServer(self.db, 0)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(thread.join, 5)
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        register_workbench(
+            {"port": server.server_port, "pid": os.getpid(),
+             "url": f"http://127.0.0.1:{server.server_port}/", "db": str(self.db),
+             "workspace": str(self.tmp.name), "started_at": "t"},
+            path=registry)
+
+        with mock.patch.dict(os.environ, {REGISTRY_ENV: str(registry)}), \
+                mock.patch("apsgraph.workbench._terminate_pid") as terminate:
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                rc = main(["workbench", "close", "--port", str(server.server_port)])
+
+        self.assertEqual(0, rc)
+        payload = json.loads(output.getvalue())
+        self.assertEqual([server.server_port], [e["port"] for e in payload["closed"]])
+        terminate.assert_called_once_with(os.getpid())
 
 
 if __name__ == "__main__":

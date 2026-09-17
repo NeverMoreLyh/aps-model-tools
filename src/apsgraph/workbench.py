@@ -9,11 +9,16 @@ workspace, or any business repository.
 from __future__ import annotations
 
 import json
+import os
+import signal
 import sqlite3
+import subprocess
 import xml.etree.ElementTree as ET
 import sys
 import threading
+import urllib.request
 import webbrowser
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -27,6 +32,10 @@ from .store import (
 WORKBENCH_PORT = 8321
 PAGE_SIZE = 50
 MAX_PAGE_SIZE = 500
+
+# 覆盖实例注册表路径的环境变量；默认在用户主目录下（跨工作区共享，
+# 供 workbench list / close 发现其他文件夹下启动的实例）。
+REGISTRY_ENV = "APSGRAPH_WORKBENCH_REGISTRY"
 
 STATIC_DIR = Path(__file__).resolve().parent / "workbench_static"
 
@@ -892,16 +901,213 @@ class WorkbenchServer(ThreadingHTTPServer):
         self.db_path = Path(db_path)
 
 
-def serve_workbench(db_path: Path, port: int = WORKBENCH_PORT,
-                    open_browser: bool = True, progress=None) -> int:
-    """Start the local workbench server; blocks until interrupted."""
+def registry_path() -> Path:
+    """User-level registry file tracking running workbench instances."""
+    override = os.environ.get(REGISTRY_ENV)
+    if override:
+        return Path(override)
+    return Path.home() / ".apsgraph" / "workbench-registry.json"
+
+
+def _load_registry(path: Path) -> List[Dict[str, Any]]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    entries = payload.get("instances") if isinstance(payload, dict) else None
+    if not isinstance(entries, list):
+        return []
+    return [entry for entry in entries if isinstance(entry, dict)]
+
+
+def _save_registry(path: Path, entries: List[Dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps({"instances": entries}, ensure_ascii=False, indent=2),
+                   encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def register_workbench(entry: Dict[str, Any], path: Optional[Path] = None) -> None:
+    """Record one running instance; an entry with the same port is replaced."""
+    path = Path(path) if path else registry_path()
+    entries = [item for item in _load_registry(path) if item.get("port") != entry["port"]]
+    entries.append(entry)
+    _save_registry(path, entries)
+
+
+def unregister_workbench(port: int, path: Optional[Path] = None) -> None:
+    path = Path(path) if path else registry_path()
+    entries = _load_registry(path)
+    kept = [item for item in entries if item.get("port") != port]
+    if len(kept) != len(entries):
+        _save_registry(path, kept)
+
+
+def _pid_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        # os.kill on Windows terminates the target for any signal other than
+        # the CTRL events, so liveness must be probed via tasklist instead.
+        # tasklist 输出使用本地代码页（如 GBK），按字节匹配 ASCII 的 pid 引号串。
+        try:
+            listing = subprocess.run(
+                ["tasklist", "/FI", f"PID eq {pid}", "/NH", "/FO", "CSV"],
+                capture_output=True, timeout=15, check=False).stdout or b""
+        except (OSError, ValueError):
+            return True  # 无法判断时按存活处理，由 close 端探测后再决定
+        return f'"{pid}"'.encode("ascii") in listing
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _probe_workbench(port: int, timeout: float = 3.0) -> bool:
+    """True when 127.0.0.1:<port>/api/stats answers like an APSGraph workbench.
+
+    close 用它确认注册表条目仍然对应本工具的实例，避免 pid 被复用后误杀无关进程。
+    """
+    try:
+        with urllib.request.urlopen(
+                f"http://127.0.0.1:{port}/api/stats", timeout=timeout) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(payload, dict) and "stats" in payload
+
+
+def _terminate_pid(pid: int) -> None:
+    os.kill(pid, signal.SIGTERM)
+
+
+def list_workbenches(path: Optional[Path] = None,
+                     progress=None) -> Dict[str, Any]:
+    """Running instances from the registry; stale entries are pruned in place."""
+    path = Path(path) if path else registry_path()
+    alive: List[Dict[str, Any]] = []
+    stale: List[Dict[str, Any]] = []
+    for entry in _load_registry(path):
+        try:
+            pid = int(entry.get("pid", 0))
+            port = int(entry.get("port", 0))
+        except (TypeError, ValueError):
+            stale.append(entry)
+            continue
+        if _pid_alive(pid) and _probe_workbench(port):
+            alive.append(entry)
+        else:
+            stale.append(entry)
+    if stale:
+        try:
+            _save_registry(path, alive)
+        except OSError as exc:
+            if progress:
+                progress(f"could not prune stale workbench registry entries: {exc}")
+    return {"instances": sorted(alive, key=lambda item: item.get("port", 0)),
+            "pruned_stale": len(stale)}
+
+
+def close_workbenches(port: Optional[int] = None, close_all: bool = False,
+                      path: Optional[Path] = None, progress=None) -> Dict[str, Any]:
+    """Stop registered instance(s) and remove their registry entries.
+
+    Only processes that currently answer the workbench API are terminated; a
+    live pid whose port no longer serves the workbench API is reported as a
+    stale entry and pruned instead of being killed.
+    """
+    path = Path(path) if path else registry_path()
+    entries = _load_registry(path)
+    if close_all:
+        targets = list(enumerate(entries))
+    else:
+        targets = [(index, entry) for index, entry in enumerate(entries)
+                   if entry.get("port") == port]
+    result: Dict[str, Any] = {"closed": [], "already_stopped": [], "stale": [],
+                              "failed": [], "not_found": []}
+    if not targets:
+        if not close_all:
+            result["not_found"].append(port)
+        return result
+    dropped: set = set()
+    for index, entry in targets:
+        try:
+            pid = int(entry.get("pid", 0))
+            port_value = int(entry.get("port", 0))
+        except (TypeError, ValueError):
+            pid, port_value = 0, 0
+        if _probe_workbench(port_value):
+            try:
+                _terminate_pid(pid)
+                result["closed"].append(entry)
+                dropped.add(index)
+                if progress:
+                    progress(f"workbench stopped: 127.0.0.1:{port_value} (pid {pid})")
+            except (OSError, ValueError) as exc:
+                failed = dict(entry)
+                failed["error"] = str(exc)
+                result["failed"].append(failed)
+        elif not _pid_alive(pid):
+            result["already_stopped"].append(entry)
+            dropped.add(index)
+        else:
+            # pid 复用或端口被其他程序占用：不终止进程，仅清理注册表条目
+            result["stale"].append(entry)
+            dropped.add(index)
+    kept = [entry for index, entry in enumerate(entries) if index not in dropped]
+    _save_registry(path, kept)
+    return result
+
+
+def _install_sigterm_handler() -> None:
+    """Turn SIGTERM into KeyboardInterrupt so POSIX termination still unregisters."""
+    if not hasattr(signal, "SIGTERM"):
+        return
+
+    def _handler(signum: int, frame: Any) -> None:
+        raise KeyboardInterrupt
+
+    try:
+        signal.signal(signal.SIGTERM, _handler)
+    except (ValueError, OSError):
+        pass  # not the main thread or unsupported platform
+
+
+def _instance_entry(server: WorkbenchServer, db_path: Path, url: str) -> Dict[str, Any]:
+    db_path = Path(db_path).resolve()
+    workspace = (db_path.parent.parent if db_path.parent.name == ".apsgraph"
+                 else db_path.parent)
+    return {"port": int(server.server_port), "pid": os.getpid(), "url": url,
+            "db": str(db_path), "workspace": str(Path(workspace).resolve()),
+            "started_at": datetime.now().astimezone().isoformat(timespec="seconds")}
+
+
+def _bind_workbench_server(db_path: Path, port: int) -> WorkbenchServer:
     db_path = Path(db_path)
     if not db_path.is_file():
         raise FileNotFoundError(
             f"index database does not exist: {db_path}; run 'apsgraph scan' first")
     connect(db_path, read_only=True).close()
-    server = WorkbenchServer(db_path, port)
+    try:
+        return WorkbenchServer(db_path, port)
+    except OSError as exc:
+        raise ValueError(f"cannot bind 127.0.0.1:{port}: {exc}; "
+                         "use --port 0 to pick a random free port") from exc
+
+
+def _serve_workbench_server(server: WorkbenchServer, db_path: Path,
+                            open_browser: bool = True, progress=None) -> int:
+    _install_sigterm_handler()
     url = f"http://127.0.0.1:{server.server_port}/"
+    try:
+        register_workbench(_instance_entry(server, db_path, url))
+    except OSError as exc:
+        if progress:
+            progress(f"could not record workbench instance in registry: {exc}")
     if progress:
         progress(f"workbench serving {db_path} at {url} (Ctrl+C to stop)")
     if open_browser:
@@ -912,5 +1118,23 @@ def serve_workbench(db_path: Path, port: int = WORKBENCH_PORT,
         if progress:
             progress("workbench stopped")
     finally:
+        try:
+            unregister_workbench(server.server_port)
+        except OSError:
+            pass
         server.server_close()
     return 0
+
+
+def serve_workbench(db_path: Path, port: int = WORKBENCH_PORT,
+                    open_browser: bool = True, progress=None) -> int:
+    """Start the local workbench server; blocks until interrupted.
+
+    ``port`` 0 binds a random free port, allowing several workspaces to be
+    served at the same time; the effective port is reported in the URL and
+    recorded in the instance registry.
+    """
+    db_path = Path(db_path)
+    server = _bind_workbench_server(db_path, port)
+    return _serve_workbench_server(server, db_path, open_browser=open_browser,
+                                   progress=progress)

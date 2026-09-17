@@ -6,6 +6,7 @@ import sqlite3
 import urllib.parse
 from pathlib import Path
 from typing import Any, Dict, List
+from urllib.request import url2pathname
 
 from .impact import build_impact_report
 from .search_scope import SearchScope
@@ -66,7 +67,8 @@ class MetadataGraphMcp:
             uri = root.get("uri") if isinstance(root, dict) else None
             if not uri or not uri.startswith("file:"):
                 continue
-            path = Path(urllib.parse.unquote(urllib.parse.urlparse(uri).path))
+            # url2pathname 处理 file URI 的平台差异：Windows 上 "/C:/x" 需转为 "C:\x"
+            path = Path(url2pathname(urllib.parse.unquote(urllib.parse.urlparse(uri).path)))
             if path.is_dir():
                 candidates.append(path)
         if candidates:
@@ -94,7 +96,9 @@ class MetadataGraphMcp:
         self._ensure_paths()
         scope = scope_from(arguments)
         limit = min(int(arguments.get("limit", 50)), 500)
-        with connect(self.db, read_only=True) as conn:
+        # with conn 只管理事务不关闭连接；MCP 服务进程长驻，必须显式释放句柄
+        conn = connect(self.db, read_only=True)
+        try:
             if name == "search_metadata":
                 rows = search_nodes(conn, str(arguments.get("query", "")), limit, scope)
                 return result_text({"query": arguments.get("query", ""), "scope": scope.__dict__, "count": len(rows), "results": rows})
@@ -125,6 +129,8 @@ class MetadataGraphMcp:
                 max_chars = min(int(arguments.get("max_chars", 50000)), 200000)
                 raw = source.read_text(encoding="utf-8", errors="replace")[:max_chars] if source.is_file() else ""
                 return result_text({"entity": node, "source_path": str(source), "content_truncated": len(raw) >= max_chars, "xml": raw})
+        finally:
+            conn.close()
         raise ValueError(f"unknown tool: {name}")
 
     def dispatch(self, request: Dict[str, Any]) -> Dict[str, Any] | None:

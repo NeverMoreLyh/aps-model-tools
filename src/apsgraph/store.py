@@ -137,8 +137,14 @@ def connect(db_path: Path | str, read_only: bool = False, initialize: bool = Tru
     conn.row_factory = sqlite3.Row
     conn.execute("pragma foreign_keys=on")
     if initialize:
-        initialize_schema(conn)
-        conn.commit()
+        # 初始化失败（如 legacy schema 拒绝）时必须先释放句柄再抛错，
+        # 否则 Windows 上文件被锁，同进程内无法删除或重建该数据库。
+        try:
+            initialize_schema(conn)
+            conn.commit()
+        except BaseException:
+            conn.close()
+            raise
     return conn
 
 

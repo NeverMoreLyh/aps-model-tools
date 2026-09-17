@@ -25,7 +25,7 @@ from .scanner import (
 )
 from .search_scope import SearchScope
 from .store import connect, find_nodes, get_stats, references, search_nodes
-from .workbench import WORKBENCH_PORT, serve_workbench
+from .workbench import WORKBENCH_PORT, close_workbenches, list_workbenches, serve_workbench
 from .xlsx_export import ExcelExportReport, export_excel
 
 
@@ -55,6 +55,13 @@ def _positive_limit(value: str) -> int:
     if limit < 1:
         raise argparse.ArgumentTypeError("limit must be >= 1")
     return limit
+
+
+def _port_number(value: str) -> int:
+    port = int(value)
+    if not 0 <= port <= 65535:
+        raise argparse.ArgumentTypeError("port must be 0-65535 (0 = pick a random free port)")
+    return port
 
 
 def _progress(message: str) -> None:
@@ -288,10 +295,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="serve the read-only SQLite metadata query workbench at 127.0.0.1 and open it in a browser")
     workbench.add_argument("--db", type=Path, default=DEFAULT_DB,
                            help="SQLite metadata index (default: .apsgraph/apsgraph.db)")
-    workbench.add_argument("--port", type=int, default=WORKBENCH_PORT,
-                           help=f"local port to bind on 127.0.0.1 (default: {WORKBENCH_PORT})")
+    workbench.add_argument("--port", type=_port_number, default=WORKBENCH_PORT,
+                           help=f"local port to bind on 127.0.0.1; 0 picks a random free port "
+                                f"(default: {WORKBENCH_PORT})")
     workbench.add_argument("--no-browser", action="store_true",
                            help="do not open the default browser automatically")
+    workbench_subs = workbench.add_subparsers(dest="wb_command")
+    workbench_subs.add_parser(
+        "list", help="list running workbench instances (port, PID, workspace, index)")
+    wb_close = workbench_subs.add_parser(
+        "close", help="stop a running workbench instance recorded in the instance registry")
+    wb_close.add_argument("--port", type=_port_number, dest="close_port", metavar="PORT",
+                          help="port of the instance to stop")
+    wb_close.add_argument("--all", action="store_true", dest="close_all",
+                          help="stop every running instance")
     return parser
 
 
@@ -385,6 +402,20 @@ def main(argv: Optional[List[str]] = None) -> int:
         if args.command == "serve-mcp":
             return serve_stdio(args.db, args.workspace)
         if args.command == "workbench":
+            if args.wb_command == "list":
+                _json(list_workbenches(progress=_progress))
+                return 0
+            if args.wb_command == "close":
+                if args.close_port is None and not args.close_all:
+                    _json({"error": "workbench close requires --port PORT or --all"})
+                    return 2
+                if args.close_port is not None and args.close_all:
+                    _json({"error": "workbench close accepts either --port PORT or --all, not both"})
+                    return 2
+                result = close_workbenches(port=args.close_port,
+                                           close_all=args.close_all, progress=_progress)
+                _json(result)
+                return 0 if not result["not_found"] and not result["failed"] else 2
             return serve_workbench(args.db, args.port,
                                    open_browser=not args.no_browser, progress=_progress)
         if args.command == "status":

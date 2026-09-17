@@ -1,21 +1,30 @@
 import json
+import os
 import tempfile
 import threading
+import time
 import unittest
 import urllib.error
 import urllib.request
 from pathlib import Path
+from unittest import mock
 
 from apsgraph.scanner import scan_workspace
 from apsgraph.store import connect
 from apsgraph.workbench import (
     WorkbenchServer,
+    _bind_workbench_server,
+    _serve_workbench_server,
     child_nodes,
+    close_workbenches,
     enum_groups,
+    list_workbenches,
     node_detail,
+    register_workbench,
     search_group,
     serve_workbench,
     top_groups,
+    unregister_workbench,
     validate_ddl_sql,
 )
 
@@ -617,6 +626,149 @@ class WorkbenchHttpTest(WorkbenchTestBase):
     def test_serve_workbench_rejects_missing_db(self):
         with self.assertRaises(FileNotFoundError):
             serve_workbench(self.root / "nope.db", open_browser=False)
+
+
+# 选一个在测试环境不可能存活的 pid：Linux 默认 pid_max 上限 4194303，
+# Windows tasklist 对不存在的 pid 返回空结果。
+DEAD_PID = 4194303
+
+
+class WorkbenchRegistryTest(WorkbenchTestBase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.registry = Path(self.tmp.name) / "registry.json"
+
+    def _entry(self, **overrides):
+        entry = {"port": 9100, "pid": DEAD_PID, "url": "http://127.0.0.1:9100/",
+                 "db": "demo.db", "workspace": "demo",
+                 "started_at": "2026-09-17T00:00:00+08:00"}
+        entry.update(overrides)
+        return entry
+
+    def _read_registry(self):
+        return json.loads(self.registry.read_text(encoding="utf-8"))["instances"]
+
+    def _start_server(self):
+        root, db = self.build_index()
+        server = WorkbenchServer(db, 0)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(thread.join, 5)
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        return server
+
+    def _wait_for(self, predicate, timeout=5.0):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                if predicate():
+                    return True
+            except (OSError, ValueError):
+                pass  # 注册表尚未落盘，等待下一次轮询
+            time.sleep(0.05)
+        return False
+
+    def test_register_and_unregister_round_trip(self):
+        register_workbench(self._entry(), path=self.registry)
+        register_workbench(self._entry(port=9101), path=self.registry)
+        self.assertEqual([9100, 9101], sorted(e["port"] for e in self._read_registry()))
+
+        # 同端口重复注册时替换原条目而不是叠加
+        register_workbench(self._entry(pid=1), path=self.registry)
+        self.assertEqual(2, len(self._read_registry()))
+
+        unregister_workbench(9100, path=self.registry)
+        self.assertEqual([9101], [e["port"] for e in self._read_registry()])
+
+    def test_list_reports_live_instance_and_prunes_stale(self):
+        server = self._start_server()
+        register_workbench(self._entry(port=server.server_port, pid=os.getpid(),
+                                       url=f"http://127.0.0.1:{server.server_port}/"),
+                           path=self.registry)
+        # pid 已死的条目与 pid 存活但端口没有 workbench 服务的条目都算过期
+        register_workbench(self._entry(port=9399, pid=DEAD_PID), path=self.registry)
+        register_workbench(self._entry(port=9398, pid=os.getpid()), path=self.registry)
+
+        listing = list_workbenches(path=self.registry)
+        self.assertEqual([server.server_port], [e["port"] for e in listing["instances"]])
+        self.assertEqual(2, listing["pruned_stale"])
+        # 注册表已自愈，仅剩存活实例
+        self.assertEqual([server.server_port], [e["port"] for e in self._read_registry()])
+
+    def test_close_stops_live_instance_and_removes_entry(self):
+        server = self._start_server()
+        register_workbench(self._entry(port=server.server_port, pid=os.getpid()),
+                           path=self.registry)
+        with mock.patch("apsgraph.workbench._terminate_pid") as terminate:
+            result = close_workbenches(port=server.server_port, path=self.registry)
+        self.assertEqual([server.server_port], [e["port"] for e in result["closed"]])
+        terminate.assert_called_once_with(os.getpid())
+        self.assertEqual([], self._read_registry())
+
+    def test_close_reports_already_stopped_and_prunes(self):
+        register_workbench(self._entry(port=9100, pid=DEAD_PID), path=self.registry)
+        with mock.patch("apsgraph.workbench._terminate_pid") as terminate:
+            result = close_workbenches(port=9100, path=self.registry)
+        self.assertEqual([9100], [e["port"] for e in result["already_stopped"]])
+        terminate.assert_not_called()
+        self.assertEqual([], self._read_registry())
+
+    def test_close_never_kills_process_when_port_not_serving_workbench(self):
+        # pid 存活但端口无 workbench 响应（pid 复用/端口被占用）：只清理条目，不终止进程
+        register_workbench(self._entry(port=9398, pid=os.getpid()), path=self.registry)
+        with mock.patch("apsgraph.workbench._terminate_pid") as terminate:
+            result = close_workbenches(port=9398, path=self.registry)
+        self.assertEqual([9398], [e["port"] for e in result["stale"]])
+        terminate.assert_not_called()
+        self.assertEqual([], self._read_registry())
+
+    def test_close_missing_port_and_all_semantics(self):
+        result = close_workbenches(port=8321, path=self.registry)
+        self.assertEqual([8321], result["not_found"])
+
+        # --all 在注册表为空时返回空结果而不是 not_found
+        result = close_workbenches(close_all=True, path=self.registry)
+        self.assertEqual([], result["not_found"])
+
+        # close_all 停止所有实例并清空注册表
+        server = self._start_server()
+        register_workbench(self._entry(port=server.server_port, pid=os.getpid()),
+                           path=self.registry)
+        register_workbench(self._entry(port=9100, pid=DEAD_PID), path=self.registry)
+        with mock.patch("apsgraph.workbench._terminate_pid") as terminate:
+            result = close_workbenches(close_all=True, path=self.registry)
+        self.assertEqual(1, len(result["closed"]))
+        self.assertEqual(1, len(result["already_stopped"]))
+        self.assertEqual([], self._read_registry())
+
+    def test_serve_workbench_port_zero_registers_and_unregisters(self):
+        root, db = self.build_index()
+        server = _bind_workbench_server(db, 0)
+        self.assertGreater(server.server_port, 0)  # 端口 0 → 实际绑定随机可用端口
+        self.addCleanup(server.server_close)
+        messages = []
+        # patch registry_path 使 serve 线程内的注册/注销落到测试注册表
+        with mock.patch("apsgraph.workbench.registry_path", return_value=self.registry):
+            thread = threading.Thread(
+                target=_serve_workbench_server, args=(server, db),
+                kwargs={"open_browser": False, "progress": messages.append}, daemon=True)
+            thread.start()
+
+            expected_port = server.server_port
+            self.assertTrue(self._wait_for(
+                lambda: any(e.get("port") == expected_port for e in self._read_registry())))
+            entry = next(e for e in self._read_registry() if e["port"] == expected_port)
+            self.assertEqual(os.getpid(), entry["pid"])
+            self.assertEqual(f"http://127.0.0.1:{expected_port}/", entry["url"])
+            self.assertTrue(any(f":{expected_port}/" in m for m in messages))
+
+            server.shutdown()
+            thread.join(5)
+            self.assertFalse(thread.is_alive())
+            self.assertTrue(self._wait_for(lambda: not self._read_registry()))
+            self.assertEqual([], self._read_registry())
 
 
 if __name__ == "__main__":

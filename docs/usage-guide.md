@@ -1,6 +1,6 @@
 # APSGraph 使用说明
 
-> 版本：0.37.0
+> 版本：0.38.0
 > 更新时间：2026-09-17
 > 项目地址：https://github.com/NeverMoreLyh/aps-model-tools
 
@@ -96,7 +96,9 @@ apsgraph --help
 | `doc-export` | 导出 Markdown 模型文档 |
 | `xlsx-export` | 导出 Excel 模型文档 |
 | `serve-mcp` | 以 stdio MCP 服务暴露元数据工具 |
-| `workbench` | 启动本地浏览器查询工作台（只读，127.0.0.1） |
+| `workbench` | 启动本地浏览器查询工作台（只读，127.0.0.1；`--port 0` 随机端口） |
+| `workbench list` | 列出正在运行的 workbench 实例（端口、PID、工作区、索引） |
+| `workbench close` | 按端口或全部停止运行中的 workbench 实例 |
 
 ---
 
@@ -454,10 +456,26 @@ python3 scripts/verify_mcp.py \
 apsgraph workbench                          # 默认 127.0.0.1:8321 并自动打开浏览器
 apsgraph workbench --db /path/to/.apsgraph/apsgraph.db
 apsgraph workbench --port 9000 --no-browser
+apsgraph workbench --port 0                 # 随机绑定一个空闲端口，可同时启动多个工作区
 ```
 
 - 纯标准库实现，索引以只读模式打开，服务器只绑定 `127.0.0.1`，无任何写操作。
 - 索引不存在时命令报错并提示先执行 `apsgraph scan`；运行日志输出到 stderr。
+- `--port 0` 表示由操作系统分配一个随机空闲端口；实际端口以启动日志中的 URL 为准。
+- 端口被占用时报错退出（不自动降级换端口），可用 `--port 0` 或显式指定其他端口。
+
+多实例管理与实例注册表：
+
+```bash
+apsgraph workbench list                     # 列出正在运行的实例（JSON）
+apsgraph workbench close --port 8321        # 按端口停止一个实例
+apsgraph workbench close --all              # 停止当前用户的全部实例
+```
+
+- 每个实例启动时把自己的端口、PID、URL、索引路径、工作区路径与启动时间记录到用户级实例注册表 `~/.apsgraph/workbench-registry.json`（可用环境变量 `APSGRAPH_WORKBENCH_REGISTRY` 覆盖），正常退出（Ctrl+C 或 SIGTERM）时自动移除。
+- `workbench list` 输出 JSON：存活实例按端口排序，同时探测 PID 存活且 `/api/stats` 可响应；过期条目（进程已退出或端口不再服务 workbench）在列出时自动清理并计入 `pruned_stale`。
+- `workbench close` 只终止当前仍在响应 workbench API 的进程：pid 已失效的条目按 `already_stopped` 清理；pid 存活但端口已不再服务 workbench（pid 被复用或端口被其他程序占用）的条目按 `stale` 清理且不会误杀无关进程；指定端口不存在于注册表时返回 `not_found` 并以退出码 2 结束。
+- 注册表为用户级共享，因此可在任意目录下查看和关闭其他文件夹中启动的 workbench 实例。
 
 页面与查询能力：
 

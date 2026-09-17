@@ -1,6 +1,6 @@
 # APSGraph 运维说明文档
 
-> 版本：0.37.0
+> 版本：0.38.0
 > 更新时间：2026-09-17
 > 文档定位：说明安装发布、索引巡检、故障处理、备份回滚和 CI 使用。
 
@@ -95,7 +95,9 @@ apsgraph sync --workspace /path/to/workspace
 
 ### 6.4 workbench 启动失败
 
-报 `index database does not exist` 时先对目标工作区执行 `apsgraph scan`，或用 `--db` 指向正确索引。报端口占用时用 `--port` 换端口；`--no-browser` 可在无桌面环境的 CI/远程主机上只打印 URL 不拉起浏览器。
+报 `index database does not exist` 时先对目标工作区执行 `apsgraph scan`，或用 `--db` 指向正确索引。报端口占用时用 `--port 0` 改为随机空闲端口（或显式换端口），命令不会自动降级换端口；`--no-browser` 可在无桌面环境的 CI/远程主机上只打印 URL 不拉起浏览器。
+
+需要同时打开多个工作区时，为每个工作区分别执行 `apsgraph workbench --port 0`，然后用 `apsgraph workbench list` 查看全部实例（端口、PID、工作区），用 `apsgraph workbench close --port N`（或 `--all`）关闭；该命令读取用户级注册表 `~/.apsgraph/workbench-registry.json`（可用 `APSGRAPH_WORKBENCH_REGISTRY` 覆盖），过期条目（进程已退出）会在 list 时自动清理。若怀疑注册表条目过期，直接重新执行 `workbench list` 即可自愈，无需手工编辑该文件。
 
 ## 7. 性能治理
 
@@ -134,3 +136,4 @@ apsgraph stats --db /path/to/workspace/.apsgraph/apsgraph.db
 - DDL 只生成，不执行。
 - CodeGraph 数据库只读。
 - `workbench` 查询工作台仅绑定 `127.0.0.1`，索引以只读模式打开，不接受任何写请求（非 GET 一律 405）。不要将端口转发或反向代理到公网；如需远程访问，由运维侧自行落地鉴权与访问控制。
+- workbench 实例注册表只写入用户主目录 `~/.apsgraph/workbench-registry.json`，不触碰业务仓库与 CodeGraph 数据库；`workbench close` 在终止进程前先探测目标端口仍响应 workbench `/api/stats`，避免 pid 复用时误杀无关进程。

@@ -10,7 +10,7 @@ These rules apply to every agent working in this repository. They are in additio
 - Never modify business source repositories.
 - Never execute generated DDL automatically.
 - Never write to a CodeGraph database.
-- Writes are allowed only under this tool repository and the active workspace's `.apsgraph/` cache.
+- Writes are allowed only under this tool repository, the active workspace's `.apsgraph/` cache, and the user-level workbench instance registry (`~/.apsgraph/workbench-registry.json`, overridable via `APSGRAPH_WORKBENCH_REGISTRY`).
 
 ## 2. Documentation freshness
 

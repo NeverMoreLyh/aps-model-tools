@@ -228,7 +228,7 @@ apsgraph impact BpDict.A.addr --depth 3
 ```bash
 apsgraph ddl kapp_sundry_busi --dialect mysql ```
 
-生成单张表的建表 DDL（实验性，fail-closed，不自动执行）。
+生成单张表的建表 DDL（实验性，fail-closed，不自动执行）。字段类型支持枚举子集引用（`枚举Schema.枚举.子枚举`，如 `ApBaseEnumType.E_MATU_UNIT.E_MATU_UNIT_CZZQ`），回溯所属枚举类型的基础类型与长度生成列类型，与 `ddl-gen` 行为一致。
 
 ### 5.11 ddl-gen — 批量 DDL 生成
 

@@ -161,10 +161,18 @@ def _resolve_type_chain(conn: sqlite3.Connection, type_id: str, visited: Optiona
     visited.add(type_id)
     if type_id in PRIMITIVES:
         return type_id, {}, [f"primitive:{type_id}"], []
-    nodes = [n for n in find_nodes(conn, type_id) if n["kind"] == "RESTRICTION_TYPE"]
+    nodes = [n for n in find_nodes(conn, type_id) if n["kind"] in {"RESTRICTION_TYPE", "SUBENUM"}]
     if len(nodes) != 1:
         return None, {}, [], [f"unresolved or ambiguous type: {type_id}"]
     node = nodes[0]
+    if node["kind"] == "SUBENUM":
+        # 枚举子集（<subenum>，如 ApBaseEnumType.E_MATU_UNIT.E_MATU_UNIT_CZZQ）
+        # 无自身 base：回溯所属枚举类型（RESTRICTION_TYPE）按其基础类型解析
+        owner = conn.execute("select full_id from nodes where id=?", (node["owner_node_id"],)).fetchone()
+        if not owner or not owner[0]:
+            return None, {}, [node["file_path"]], [f"subenum has no owner: {type_id}"]
+        primitive, inherited, evidence, errors = _resolve_type_chain(conn, owner[0], visited)
+        return primitive, inherited, [node["file_path"]] + evidence, errors
     local = _props(node)
     base = local.get("base")
     if not base:

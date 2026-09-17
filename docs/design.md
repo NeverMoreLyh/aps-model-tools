@@ -75,7 +75,7 @@
 | 模块 | 核心算法 |
 | impact | 从目标节点反向 BFS，按深度限制收集影响路径 |
 | refs | 正向 / 反向 / 双向图遍历 |
-| ddl / ddlgen | 模型字段解析、类型映射、继承展开、方言模板 |
+| ddl / ddlgen | 模型字段解析、类型映射（含枚举子集 `<subenum>` 回溯所属枚举类型）、继承展开、方言模板 |
 | dbdiff | 模型 schema 与数据库 schema 规范化后对比 |
 | bridge | APS full_id 与生成 Java / CodeGraph 节点匹配 |
 | classify | 关键词与路径启发式分类 |

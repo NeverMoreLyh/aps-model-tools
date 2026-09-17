@@ -50,6 +50,26 @@ class ToolsTest(unittest.TestCase):
         self.assertTrue(result.errors)
         self.assertEqual("", result.sql)
 
+    def test_ddl_resolves_enum_subset_type_to_owner_restriction(self):
+        # 枚举子集（<subenum>）作为字段类型：无自身 base，回溯所属枚举类型解析
+        enum_schema = self.root / "datatype/DemoEnums.e_schema.xml"
+        enum_schema.parent.mkdir(parents=True, exist_ok=True)
+        enum_schema.write_text("""<schema id="DemoEnums" package="demo.enum">
+          <restrictionType id="E_UNIT" base="string" maxLength="1" longname="期限单位">
+            <subenum id="E_UNIT_CZZQ" enums="N,D,W"/>
+          </restrictionType>
+        </schema>""", encoding="utf-8")
+        table = self.root / "tables/EnumRef.tables.xml"
+        table.write_text("""<schema id="EnumRef" package="demo.tables"><table id="unit" name="unit"><fields>
+          <field id="reset_prd" type="DemoEnums.E_UNIT.E_UNIT_CZZQ" nullable="true"/>
+        </fields></table></schema>""", encoding="utf-8")
+        self.conn.close()
+        scan_workspace(self.root, self.db)
+        self.conn = connect(self.db)
+        result = generate_table_ddl(self.conn, "EnumRef.unit", "mysql")
+        self.assertEqual([], result.errors)
+        self.assertIn("`reset_prd` VARCHAR(1)", result.sql)
+
     def test_ddl_fails_closed_when_index_references_missing_field(self):
         table = self.root / "tables/BadIndex.tables.xml"
         table.write_text("""<schema id="BadIndex"><table id="bad" name="bad"><fields>

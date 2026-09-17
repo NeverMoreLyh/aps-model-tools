@@ -212,6 +212,7 @@ comment on column 表名.列 is '长名(枚举...)';
 | dbSequence | TABLE → SEQUENCE(properties: startWith/incrementBy/cache/cycle/maxValue/minValue) |
 | 类型链 | FIELD.type → RESTRICTION_TYPE(base/maxLength/dbLength/fractionDigits/dbFractionDigits/byCharacter/isUnsigned/isZerofill) → … → 原始类型 |
 | 枚举注释 | RESTRICTION_TYPE → ENUM_VALUE(value/longname) |
+| 枚举子集 | 字段类型可直接引用 `<subenum>`（如 `ApBaseEnumType.E_MATU_UNIT.E_MATU_UNIT_CZZQ`）：subenum 节点无自身 base，回溯所属 restrictionType 按其基础类型与长度解析列类型 |
 | 继承字段 | TABLE.extension 指向父表/复合类型，递归展开后同名字段覆盖 |
 
 ## 7. 已知差异与取舍（工具实现说明）

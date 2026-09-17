@@ -84,6 +84,25 @@ class DdlGenTest(unittest.TestCase):
         finally:
             conn.close()
 
+    def test_enum_subset_field_resolves_to_owner_restriction(self):
+        # 枚举子集（<subenum>）作为字段类型：与 ddl 命令同一回溯语义
+        enum_schema = self.root / "datatype/DemoEnums.e_schema.xml"
+        enum_schema.write_text('''<schema id="DemoEnums" package="demo.enum">
+          <restrictionType id="E_UNIT" base="string" maxLength="1" longname="期限单位">
+            <subenum id="E_UNIT_CZZQ" enums="N,D,W"/>
+          </restrictionType>
+        </schema>''', encoding="utf-8")
+        table = self.root / "tables/EnumRef.tables.xml"
+        table.write_text('''<schema id="EnumRef" package="demo.tables">
+  <table id="unit" name="unit">
+    <fields><field id="reset_prd" type="DemoEnums.E_UNIT.E_UNIT_CZZQ" nullable="true"/></fields>
+  </table>
+</schema>''', encoding="utf-8")
+        scan_workspace(self.root, self.db)
+        report = self._generate("mysql")
+        self.assertFalse(any("E_UNIT" in e for e in report.errors))
+        self.assertIn("`reset_prd` varchar(1)", report.sql)
+
     def test_unresolved_dependency_type_is_reported_before_import(self):
         report = self._generate("mysql")
         self.assertTrue(any("KBaseType.U_LONG_TEXT" in e for e in report.errors),

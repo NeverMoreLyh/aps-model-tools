@@ -17,6 +17,7 @@ from .ddlgen import DdlGenConfig, generate_all_ddl
 from .docx import DocExportReport, export_document
 from .impact import build_impact_report
 from .mcp_server import serve_stdio
+from .registry import upsert_workspace
 from .scanner import (
     scan_workspace,
     scan_workspace_with_external_indexes,
@@ -150,6 +151,9 @@ def build_parser() -> argparse.ArgumentParser:
                       help="merge an APS SQLite index produced from another XML scan; repeatable")
     scan.add_argument("--show-warning", action="store_true",
                       help="list unresolved model reference warnings on stderr after the scan summary")
+    scan.add_argument("--no-register", action="store_true",
+                      help="do not record this workspace in the global registry "
+                           "(~/.apsgraph/registry.json)")
 
     options = sub.add_parser(
         "options",
@@ -293,8 +297,12 @@ def build_parser() -> argparse.ArgumentParser:
     workbench = sub.add_parser(
         "workbench",
         help="serve the read-only SQLite metadata query workbench at 127.0.0.1 and open it in a browser")
-    workbench.add_argument("--db", type=Path, default=DEFAULT_DB,
-                           help="SQLite metadata index (default: .apsgraph/apsgraph.db)")
+    workbench.add_argument("--db", type=Path, default=None,
+                           help="SQLite metadata index; explicit --db serves that single index, "
+                                "otherwise all workspaces registered in ~/.apsgraph/registry.json")
+    workbench.add_argument("--workspace", default=None, metavar="NAME|PATH",
+                           help="registered workspace name or path to open on start; "
+                                "the UI can still switch between all registered workspaces")
     workbench.add_argument("--port", type=_port_number, default=0,
                            help="local port to bind on 127.0.0.1; defaults to a "
                                 "random free port (0)")
@@ -384,6 +392,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                 for target in summary.unresolved_models:
                     print(f"[apsgraph] warning: unresolved model reference: {target}",
                           file=sys.stderr, flush=True)
+            if not args.no_register:
+                registered = upsert_workspace(args.workspace, args.db)
+                _progress(f"workspace registered: {registered['name']} -> {registered['dbPath']}")
             return 0
         if args.command == "options":
             _json(_options_report(args.workspace))
@@ -417,7 +428,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                 _json(result)
                 return 0 if not result["not_found"] and not result["failed"] else 2
             return serve_workbench(args.db, args.port,
-                                   open_browser=not args.no_browser, progress=_progress)
+                                   open_browser=not args.no_browser, progress=_progress,
+                                   workspace=args.workspace)
         if args.command == "status":
             _json(asdict(workspace_status(args.workspace, args.db)))
             return 0

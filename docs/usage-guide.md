@@ -1,7 +1,7 @@
 # APSGraph 使用说明
 
-> 版本：0.39.0
-> 更新时间：2026-09-17
+> 版本：0.40.0
+> 更新时间：2026-09-20
 > 项目地址：https://github.com/NeverMoreLyh/aps-model-tools
 
 ---
@@ -96,7 +96,7 @@ apsgraph --help
 | `doc-export` | 导出 Markdown 模型文档 |
 | `xlsx-export` | 导出 Excel 模型文档 |
 | `serve-mcp` | 以 stdio MCP 服务暴露元数据工具 |
-| `workbench` | 启动本地浏览器查询工作台（只读，127.0.0.1；默认随机空闲端口） |
+| `workbench` | 启动本地浏览器查询工作台（只读，127.0.0.1，多 workspace 可切换，默认随机空闲端口） |
 | `workbench list` | 列出正在运行的 workbench 实例（端口、PID、工作区、索引） |
 | `workbench close` | 按端口或全部停止运行中的 workbench 实例 |
 
@@ -133,8 +133,11 @@ apsgraph scan
 | `--fail-on-parse-error` | 遇到解析错误时立即终止（默认跳过并记录） |
 | `--external-db` | 合并其他 XML 扫描生成的 APS SQLite 索引，可重复 |
 | `--show-warning` | 扫描汇总后在 stderr 列出未解析引用警告明细（默认只显示数量） |
+| `--no-register` | 不把该 workspace 写入全局注册表（默认自动注册） |
 
 普通 `scan` 只解析 workspace XML 并写入 SQLite；未解析引用不会导致失败，缺失模型名仅以警告数量计入汇总（需要明细时用 `--show-warning` 在 stderr 列出）。使用 `--external-db` 时可合并其他 XML 扫描生成的 SQLite 索引。扫描器不会把 error 描述、SQL/Java primitive、`class` / `resultClass` Java 类名当作 APS 模型引用，并会把空格分隔的多值 `extension` 拆成多条 EXTENDS 边。
+
+**全局注册**：`scan` 成功后自动把 workspace 写入全局注册表 `~/.apsgraph/registry.json`（workspace 绝对路径为唯一键，显示名默认取目录 basename），供 `workbench` 多 workspace 模式使用；重复扫描刷新同一注册项，失败的扫描不会写入注册表，`--no-register` 可跳过。注册表目录可用环境变量 `APSGRAPH_HOME` 重定向（测试/CI 隔离）。
 
 扫描和同步的进度以单行进度条写入 stderr（原地刷新，不刷屏），完成后输出一条汇总信息（文件解析结果、节点/边/未解析引用与警告数、耗时）；`scan` 的 stdout 不再输出 JSON，汇总即最终输出；其他命令的 JSON 仍只写 stdout。
 
@@ -453,10 +456,20 @@ python3 scripts/verify_mcp.py \
 对已扫描的工作区启动本地 Web 查询工作台：
 
 ```bash
-apsgraph workbench                          # 默认绑定一个随机空闲端口并自动打开浏览器
-apsgraph workbench --db /path/to/.apsgraph/apsgraph.db
+apsgraph workbench                          # 多 workspace 模式：绑定随机空闲端口并自动打开浏览器
+apsgraph workbench --workspace repo-a       # 启动直达指定注册 workspace（UI 仍可切换）
+apsgraph workbench --db /path/to/.apsgraph/apsgraph.db   # 单索引模式（不读 workspace 注册表）
 apsgraph workbench --port 8321 --no-browser # 需要固定端口时显式指定
 ```
+
+**多 workspace 模式**（默认）：读取全局注册表 `~/.apsgraph/registry.json`，在同一个本地服务里查询所有已 `scan` 注册过的 workspace：
+
+- 侧栏顶部提供 workspace 下拉选择器，展示名称与最后扫描时间；切换后页面数据（总览统计、查询结果、详情）整体切换。点开下拉时会重新读取注册表——workbench 开着时新 `scan` 的仓库无需重启即可切换。
+- 裸跑时默认选中：当前目录是已注册 workspace → 选中它；否则当前目录有 `.apsgraph/apsgraph.db` → 选中当前目录；否则选中上次使用的 workspace；注册表为空且当前目录无索引时报错提示先 `scan`。
+- `--workspace <名称|路径>` 启动直达某个注册 workspace；指向一个真实存在且有索引的未注册目录时按只读方式直接打开（不自动注册）。
+- 已删除/移动的 workspace 在选择器中灰显标注"（失效）"，选中时报错提示重新 `scan`；重新 `scan` 会自动恢复注册。
+- 查看某个 workspace 会刷新其在注册表中的"最后使用"时间；除该时间戳外服务无任何写操作。
+- 显式 `--db` 保持单索引模式，不读 workspace 注册表；随机端口与实例注册行为与单索引模式一致。
 
 - 纯标准库实现，索引以只读模式打开，服务器只绑定 `127.0.0.1`，无任何写操作。
 - 索引不存在时命令报错并提示先执行 `apsgraph scan`；运行日志输出到 stderr。

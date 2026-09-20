@@ -1,7 +1,7 @@
 # APSGraph 需求文档
 
-> 版本：0.39.0
-> 更新时间：2026-09-17  
+> 版本：0.40.0
+> 更新时间：2026-09-20  
 > 文档定位：本文件是 APSGraph 的长期需求基线，汇总产品定位、用户需求、功能需求、非功能需求与演进需求。新增需求必须先更新本文，再进入设计与实现。
 
 ---
@@ -37,6 +37,7 @@ APSGraph 不修改业务源码，不执行 DDL，不写入 CodeGraph 数据库�
 - 默认 workspace 是当前工作目录。
 - 默认数据库为 `<workspace>/.apsgraph/apsgraph.db`。
 - 默认缓存目录为 `<workspace>/.apsgraph`。
+- 全局 workspace 注册表为 `~/.apsgraph/registry.json`（可用环境变量 `APSGRAPH_HOME` 重定向注册表目录，用于测试与 CI 隔离）。
 - 用户可通过 `--workspace`、`--db` 覆盖默认值。
 
 ### R3 XML 模型索引
@@ -110,6 +111,26 @@ APSGraph 不修改业务源码，不执行 DDL，不写入 CodeGraph 数据库�
 - 已解析引用必须可点击跳转到目标详情；未解析引用显示原始目标。
 - 布局交互：左侧菜单一二级聚合，一级菜单为交易、服务、表、字典数据项、枚举类型、基础类型，其余页面（含文件批量、命名SQL文件、命名SQL、分片）统一归入可展开的“其他”分组（默认收起）；左侧菜单可收起/展开；结果列表默认占窗口宽度 1/4 且可通过分隔条拖拽调节；mermaid 流程图画布默认 0.6 缩放，支持放大/缩小/重置/全屏、滚轮缩放与拖拽平移；全屏弹层必须提供关闭按钮。
 - 索引不存在时 fail-closed 报错提示先执行 `scan`；工作台不得提供任何写能力。
+
+### R20 全局 workspace 注册
+
+- `scan` 成功发布索引后自动把 workspace 注册到全局注册表 `~/.apsgraph/registry.json`（与实例注册表 `workbench-registry.json` 相互独立）；`--no-register` 可跳过注册。
+- 注册表以 workspace 绝对路径为唯一键：重复扫描同一 workspace 是刷新（更新 `dbPath`、`lastScanAt`）而非新增；显示名 `name` 默认取目录 basename，允许重名。
+- 注册表字段：`name`、`workspacePath`、`dbPath`、`lastScanAt`、`lastUsedAt`。
+- 注册只发生在成功的 `scan`；`sync` 与失败的 `scan` 不修改注册表。
+- 注册表写入采用临时文件 + 原子替换；注册表文件损坏或结构非法时 fail-closed 报错，不得静默重建。
+- workbench 服务 workspace 时刷新被使用注册 workspace 的 `lastUsedAt`；该刷新失败只记录 stderr 警告，不中断浏览。
+- 全局注册表目录可用环境变量 `APSGRAPH_HOME` 重定向（测试/CI 隔离）。
+
+### R20a 多 workspace 查询工作台
+
+- `workbench` 不带 `--db` 时进入多 workspace 模式：读取全局注册表，在同一个本地服务内提供所有已注册 workspace 的查询，UI 侧栏提供 workspace 下拉选择器（展示名称与最后扫描时间，索引已失效的条目标注"失效"并灰显）。
+- 裸跑 `workbench` 的默认选中顺序：当前目录是已注册 workspace → 选中它；否则当前目录存在 `.apsgraph/apsgraph.db` → 选中当前目录；否则选中上次使用的（`lastUsedAt` 最新，其次 `lastScanAt` 最新）；注册表为空且当前目录无索引时 fail-closed 提示先 `scan`。
+- `--workspace <名称|路径>` 启动直达：先按注册表 name 精确匹配（重名命中多个时报错并列出候选路径），再按解析后的 workspace 路径匹配；指向真实存在目录但未注册时，若 `<目录>/.apsgraph/apsgraph.db` 存在则按只读方式直接服务（不自动注册）；均未命中时报错并列出可用注册名。
+- 显式 `--db` 时保持单索引模式（优先级最高），不读 workspace 注册表；随机端口与实例注册行为与单索引模式一致。
+- 服务端每个请求重新读取注册表：workbench 运行中新 `scan` 的 workspace 无需重启即可切换。
+- 注册表中索引已失效的条目在列表中正常展示但标注失效；选中时 fail-closed 报错提示重新 `scan`，条目不自动剔除。
+- 多 workspace 模式同样只读、仅绑定 `127.0.0.1`；除注册表 `lastUsedAt` 刷新外无任何写操作。
 
 ### R18 版本与发布流程
 

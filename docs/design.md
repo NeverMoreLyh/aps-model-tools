@@ -1,7 +1,7 @@
 # APSGraph 设计文档
 
-> 版本：0.39.0
-> 更新时间：2026-09-17  
+> 版本：0.40.0
+> 更新时间：2026-09-20  
 > 文档定位：说明 APSGraph 的关键架构、模块设计、数据模型、算法、并发模型、性能设计和安全边界。
 
 ---
@@ -30,6 +30,12 @@
       v                    |
  .apsgraph/apsgraph.db     |
       |                    |
+ registry upsert           |
+      v                    |
+ ~/.apsgraph/registry.json |
+      |                    |
+ workbench multi-workspace |
+      |                    |
  impact / ddl / diff / bridge / classify / export
 ```
 
@@ -40,6 +46,7 @@
 | CLI 层 | 参数解析、默认值、JSON 输出、stderr 日志 |
 | Scanner 层 | XML 发现、解析、节点与边生成、增量同步 |
 | Store 层 | SQLite schema、连接、只读查询 |
+| Registry 层 | 全局 workspace 注册表读写、workspace 令牌解析 |
 | Analysis 层 | refs、impact、DDL、db-diff、bridge、classify |
 | Export 层 | Markdown、Excel 文档输出 |
 
@@ -54,6 +61,15 @@
 - 引用边保存来源节点、目标节点、raw target、关系类型、证据文件、证据值、置信度。
 - 支持外部索引以 `external-db:<db>!<path>` 逻辑路径合并。
 - 对非模型属性做语义过滤，降低 unresolved 噪声。
+
+### 3.2 `apsgraph.registry`
+
+全局 workspace 注册表（`~/.apsgraph/registry.json`，`APSGRAPH_HOME` 可重定向目录；与实例注册表 `workbench-registry.json` 独立）：
+
+- 文件结构 `{"version": 1, "workspaces": [...]}`，条目字段 `name`（显示名，默认目录 basename，允许重名）、`workspacePath`（唯一键，resolve 后的绝对路径）、`dbPath`、`lastScanAt`、`lastUsedAt`（`%Y-%m-%d %H:%M:%S` 本地时间）。
+- 写路径：`scan` 成功后 `upsert_workspace`（按 resolved workspacePath upsert，重复扫描刷新而非新增）；workbench 服务已注册 workspace 时 `touch_workspace` 刷新 `lastUsedAt`。写采用临时文件 + `os.replace` 原子替换；进程内并发（workbench 多线程 touch 与 scan upsert）由模块级锁保护，跨进程按最后写者胜（最坏只丢一次时间戳刷新）。
+- 读路径：`load_registry` 对缺失文件返回空注册表，对损坏/结构非法文件 fail-closed 抛错，绝不静默重建；`workspace_overview` 输出带 `available`（索引文件存在性）标注、按最近使用排序的列表。
+- 解析路径：`resolve_workspace(token)` 依次按注册名精确匹配（重名命中多个时报错列候选）、解析后路径匹配、宽松规则（真实目录且 `<dir>/.apsgraph/apsgraph.db` 存在则只读直开、不注册）；`default_selection(cwd)` 实现裸跑默认选中（已注册 cwd → 未注册 cwd 索引 → 上次使用 → 最近扫描，全无时 fail-closed）。
 
 ### 3.3 `apsgraph.store`
 
@@ -83,7 +99,9 @@
 
 ### 3.5.1 查询工作台（workbench）
 
-`apsgraph workbench` 用标准库 `http.server.ThreadingHTTPServer` 在 `127.0.0.1` 提供只读查询页面与 JSON API（`/api/search`、`/api/enums`、`/api/node`、`/api/children`、`/api/ddl`、`/api/top-groups`、`/api/parse-failures`、`/api/dashboard`、`/api/stats`；`/api/node` 载荷含 `xml_fragment`——按来源路径按需读取源 XML 并以 full_id 链定位节点，无 full_id 的容器节点沿 owner 链回溯加容器标签链定位，原始片段不写入 SQLite；文件级节点（SQL_GROUP/DICTIONARY/ERRORCONF）跳过片段展示）：
+`apsgraph workbench` 用标准库 `http.server.ThreadingHTTPServer` 在 `127.0.0.1` 提供只读查询页面与 JSON API（`/api/search`、`/api/enums`、`/api/node`、`/api/children`、`/api/ddl`、`/api/top-groups`、`/api/parse-failures`、`/api/dashboard`、`/api/stats`、`/api/workspaces`；`/api/node` 载荷含 `xml_fragment`——按来源路径按需读取源 XML 并以 full_id 链定位节点，无 full_id 的容器节点沿 owner 链回溯加容器标签链定位，原始片段不写入 SQLite；文件级节点（SQL_GROUP/DICTIONARY/ERRORCONF）跳过片段展示）：
+
+- 多 workspace 路由：显式 `--db` 为单索引模式（`_SingleDbRouter`，行为与历史版本一致）；否则进入多 workspace 模式（`WorkspaceRouter`），每个 API 请求按 `?ws=` 令牌经 `resolve_workspace` 路由到对应索引，令牌缺省时依次回退启动参数 `--workspace`、`default_selection`；`/api/workspaces` 返回注册表概览（含失效标注）与服务端默认选中项。服务端不缓存注册表——workbench 运行中新 scan 的 workspace 无需重启即可切换。dashboard 请求会触发已注册 workspace 的 `lastUsedAt` 刷新（失败仅 stderr 警告）；解析到的索引文件不存在时 fail-closed 返回 400 并提示重新 `scan`（列表仍展示该条目，前端灰显标注"失效"）。前端在侧栏品牌区下方常驻 workspace 下拉选择器（总览页也可见），点开下拉时重新拉取列表，所有 API 调用自动携带当前 `ws`；注册表工作区的 `source_root` 直接取注册的 workspace 路径，未注册宽松直开时取目录本身，显式 `--db` 模式保持"db 位于 `.apsgraph` 下取其上级"的推断。
 
 - 总览页 `/api/dashboard` 汇总索引统计（文件/解析状态/节点/边/未解析）、SQLite 文件大小与各页面记录数（复用各分组的空关键字计数），前端以卡片呈现并支持点击跳转；
 - 查询分组由 `KIND_GROUPS` 定义：枚举值（ENUM_VALUE）、数据字典（DICTIONARY，`.d_schema.xml`）、错误码（真实工程 `.error.xml` 为 `errorConf` 根，kind ERRORCONF，详情按 `errors>error` 分组展示 message 明细并支持按 message 搜索）、复合类型、字典数据项（ELEMENT 且父为 DICTIONARY、来源 `.d_schema.xml`，粒度 `BpDict.B.btch_grp_num`；排除复合类型的 element）、表、服务文件（SERVICE_TYPE）、服务（SERVICE_OPERATION，fullId 形如 `ApBatchFileService.smtbat`）、交易、批量交易、文件批量（FILE_BATCH_TRANSACTION，`.file_batch_tran.xml`）、命名SQL文件（SQL_GROUP，`.nsql.xml`，详情展示 NAMED_SQL 语句列表）、命名SQL（NAMED_SQL，粒度 `ApBatchFileSqls.upd_tb_file_tran_req`；NAMED_SQL 详情展示 parameter 子节点，并按需从源 XML 解析 SQL 文本按数据库类型展示——静态语句取 `<sql type="...">` 子元素，动态语句（dynamicSelect/dynamicSql）按 MyBatis mapper 机制原样展示每个 `<dynamicSql type="...">` 原始 XML 节点（含 str/test 等子节点）（无 type 为 NONE 且置顶；工作区由 db 路径推断——db 位于 `.apsgraph` 下时取其上级，源文件不可达时显示提示））、分片（SHARDINGSTRATEGY，`.sharding.xml`，详情展示 strategy 列表）、基础类型（RESTRICTION_TYPE，来源 `.u_schema.xml`）、常量（CONSTANT，来源 `.constant.xml`）；前端左侧菜单一二级聚合（一级为交易/服务/表/数据字典/枚举类型/基础类型，其余归入可展开的“其他”组，默认收起）；顶层模型页按 `owner_node_id IS NULL` 过滤并可按 kind 再过滤。
@@ -224,7 +242,10 @@ staging DB -> validate -> os.replace(staging, target)
 ### 7.2 Fail-closed 场景
 
 - 非法索引或跨 workspace 索引；
-- 外部索引不可读或与目标索引冲突。
+- 外部索引不可读或与目标索引冲突；
+- 注册表文件损坏或结构非法（报错提示，不静默重建）；
+- workbench 裸跑时注册表为空且当前目录无索引（提示先 `scan`）；
+- workbench 选中 workspace 的索引文件不存在（返回错误提示重新 `scan`，注册条目不自动剔除）。
 
 ### 7.3 容忍场景
 
@@ -243,6 +264,7 @@ staging DB -> validate -> os.replace(staging, target)
 | CodeGraph 污染 | 只读连接 |
 | 命令注入 | DB 参数通过参数化 SQL 传递 |
 | workbench 暴露面 | 仅绑定 127.0.0.1、GET-only、索引只读打开、静态资源防路径穿越 |
+| 全局注册表写入面 | `~/.apsgraph` 下仅实例注册表与 workspace 注册表两处用户级文件；workspace 注册表只由 `scan` upsert 与 workbench `lastUsedAt` 刷新写入，原子替换写，不承载任何索引或源码数据 |
 
 ## 9. 可观测性设计
 

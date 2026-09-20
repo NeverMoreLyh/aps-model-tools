@@ -1,9 +1,17 @@
 """Read-only local web workbench over the APSGraph SQLite index.
 
 Serves a single-page query UI from the standard library ``http.server`` and a
-small JSON API.  The index database is always opened read-only and the server
-binds to 127.0.0.1 only; the workbench never writes to the index, the
-workspace, or any business repository.
+small JSON API.  Index databases are always opened read-only and the server
+binds to 127.0.0.1 only; the workbench never writes to any index, workspace,
+or business repository.  The only things it may write are two user-level
+registries under ``~/.apsgraph``: the workspace registry (``lastUsedAt``
+refresh, see ``apsgraph.registry``) and the running-instance registry
+(``workbench-registry.json``, see below).
+
+Without ``--db`` the server is multi-workspace: every API request resolves a
+``ws`` token (registered name or workspace path) against the global workspace
+registry, so all registered workspaces are browsable and switchable in one
+place without a server restart.
 """
 
 from __future__ import annotations
@@ -21,10 +29,14 @@ import webbrowser
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 from urllib.parse import parse_qs, urlparse
 
 from .ddlgen import DdlGenConfig, generate_all_ddl
+from .registry import (
+    WorkspaceRef, default_selection, resolve_workspace, touch_workspace,
+    workspace_overview,
+)
 from .store import (
     NODE_SELECT, _row_to_dict, connect, find_nodes, get_stats, references,
 )
@@ -711,9 +723,10 @@ def node_detail(conn: sqlite3.Connection, stable_id: str,
 class WorkbenchHandler(BaseHTTPRequestHandler):
     server_version = "apsgraph-workbench"
 
-    @property
-    def db_path(self) -> Path:
-        return self.server.db_path  # type: ignore[attr-defined]
+    def _resolve(self, params: Dict[str, List[str]]) -> WorkspaceRef:
+        """Workspace for this request: the ``ws`` token wins, then the server
+        default (startup ``--workspace`` or the bare-run default selection)."""
+        return self.server.router.resolve(params.get("ws", [None])[0])  # type: ignore[attr-defined]
 
     def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
         print(f"[apsgraph] workbench: {self.address_string()} {format % args}",
@@ -744,8 +757,8 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _api_search(self, params: Dict[str, List[str]]) -> Dict[str, Any]:
-        conn = connect(self.db_path, read_only=True)
+    def _api_search(self, ref: WorkspaceRef, params: Dict[str, List[str]]) -> Dict[str, Any]:
+        conn = connect(ref.db_path, read_only=True)
         try:
             return search_group(
                 conn,
@@ -760,16 +773,13 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
         finally:
             conn.close()
 
-    def _api_node(self, params: Dict[str, List[str]]) -> Dict[str, Any]:
+    def _api_node(self, ref: WorkspaceRef, params: Dict[str, List[str]]) -> Dict[str, Any]:
         stable_id = params.get("id", [""])[0]
         if not stable_id:
             raise ValueError("missing node id")
-        conn = connect(self.db_path, read_only=True)
+        conn = connect(ref.db_path, read_only=True)
         try:
-            source_root = (self.db_path.parent.parent
-                           if self.db_path.parent.name == ".apsgraph"
-                           else self.db_path.parent)
-            return node_detail(conn, stable_id, source_root=source_root)
+            return node_detail(conn, stable_id, source_root=ref.source_root)
         finally:
             conn.close()
 
@@ -788,17 +798,17 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
         return {"total": len(rows),
                 "results": [dict(row) for row in rows]}
 
-    def _api_children(self, params: Dict[str, List[str]]) -> Dict[str, Any]:
+    def _api_children(self, ref: WorkspaceRef, params: Dict[str, List[str]]) -> Dict[str, Any]:
         stable_id = params.get("id", [""])[0]
         if not stable_id:
             raise ValueError("missing node id")
-        conn = connect(self.db_path, read_only=True)
+        conn = connect(ref.db_path, read_only=True)
         try:
             return {"id": stable_id, "children": child_nodes(conn, stable_id)}
         finally:
             conn.close()
 
-    def _api_ddl(self, params: Dict[str, List[str]]) -> Dict[str, Any]:
+    def _api_ddl(self, ref: WorkspaceRef, params: Dict[str, List[str]]) -> Dict[str, Any]:
         """Preview DDL for one table; generation only, never executed."""
         node_ref = params.get("id", [""])[0]
         dialect = params.get("dialect", ["mysql"])[0]
@@ -806,7 +816,7 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
             raise ValueError("missing node id")
         if dialect not in {"mysql", "oracle", "postgresql"}:
             raise ValueError(f"unsupported dialect: {dialect}")
-        conn = connect(self.db_path, read_only=True)
+        conn = connect(ref.db_path, read_only=True)
         try:
             row = conn.execute("select kind from nodes where stable_id=?",
                                (_resolve_node_row(conn, node_ref)["stable_id"],)).fetchone()
@@ -819,30 +829,60 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
         finally:
             conn.close()
 
+    def _api_workspaces(self) -> Dict[str, Any]:
+        """Workspace selector payload; ``default`` mirrors the bare-run
+        selection so the UI opens on the same workspace the server chose."""
+        router = self.server.router  # type: ignore[attr-defined]
+        if isinstance(router, _SingleDbRouter):
+            return {"mode": "single"}
+        default_path: Optional[str] = None
+        try:
+            ref = router.resolve(None)
+            default_path = str(ref.workspace_path or ref.source_root)
+        except (ValueError, OSError):
+            default_path = None
+        return {"mode": "multi", "workspaces": workspace_overview(router.registry),
+                "default": default_path}
+
+    def _touch(self, ref: WorkspaceRef) -> None:
+        """Refresh lastUsedAt; a broken registry must not break browsing."""
+        try:
+            self.server.router.touch(ref)  # type: ignore[attr-defined]
+        except (ValueError, OSError) as exc:
+            print(f"[apsgraph] workbench: registry lastUsedAt update failed: {exc}",
+                  file=sys.stderr, flush=True)
+
     def _handle_api(self, path: str, params: Dict[str, List[str]]) -> None:
+        if path == "/api/workspaces":
+            self._send_json(self._api_workspaces())
+            return
+        ref = self._resolve(params)
         if path == "/api/stats":
-            conn = connect(self.db_path, read_only=True)
+            conn = connect(ref.db_path, read_only=True)
             try:
                 self._send_json({"stats": get_stats(conn),
                                  "top_groups": top_groups(conn)})
             finally:
                 conn.close()
         elif path == "/api/search":
-            self._send_json(self._api_search(params))
+            self._send_json(self._api_search(ref, params))
         elif path == "/api/parse-failures":
-            conn = connect(self.db_path, read_only=True)
+            conn = connect(ref.db_path, read_only=True)
             try:
                 self._send_json(self._api_parse_failures(conn, params))
             finally:
                 conn.close()
         elif path == "/api/dashboard":
-            conn = connect(self.db_path, read_only=True)
+            conn = connect(ref.db_path, read_only=True)
             try:
-                self._send_json(dashboard(conn, self.db_path))
+                payload = dashboard(conn, ref.db_path)
             finally:
                 conn.close()
+            if ref.workspace_path:
+                self._touch(ref)
+            self._send_json(payload)
         elif path == "/api/enums":
-            conn = connect(self.db_path, read_only=True)
+            conn = connect(ref.db_path, read_only=True)
             try:
                 self._send_json(enum_groups(
                     conn,
@@ -853,13 +893,13 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
             finally:
                 conn.close()
         elif path == "/api/node":
-            self._send_json(self._api_node(params))
+            self._send_json(self._api_node(ref, params))
         elif path == "/api/children":
-            self._send_json(self._api_children(params))
+            self._send_json(self._api_children(ref, params))
         elif path == "/api/ddl":
-            self._send_json(self._api_ddl(params))
+            self._send_json(self._api_ddl(ref, params))
         elif path == "/api/top-groups":
-            conn = connect(self.db_path, read_only=True)
+            conn = connect(ref.db_path, read_only=True)
             try:
                 self._send_json({"groups": top_groups(conn)})
             finally:
@@ -894,6 +934,54 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
         self._send_json({"error": "workbench is read-only; only GET is supported"}, 405)
 
 
+class _SingleDbRouter:
+    """Serve one explicit ``--db`` index; the legacy single-workspace mode."""
+
+    def __init__(self, db_path: Path):
+        self.db_path = Path(db_path)
+
+    def resolve(self, token: Optional[str] = None) -> WorkspaceRef:
+        source_root = (self.db_path.parent.parent
+                       if self.db_path.parent.name == ".apsgraph"
+                       else self.db_path.parent)
+        return WorkspaceRef(db_path=self.db_path, source_root=source_root)
+
+    def touch(self, ref: WorkspaceRef) -> bool:
+        return False
+
+
+class WorkspaceRouter:
+    """Route requests to workspaces from the global registry.
+
+    Request ``ws`` tokens win; then the startup token (``--workspace``);
+    then the bare-run default selection.  Resolution happens per request so
+    workspaces scanned after the server started are switchable immediately.
+    """
+
+    def __init__(self, token: Optional[str] = None, registry: Optional[Path] = None):
+        self.token = token
+        self.registry = registry
+
+    def resolve(self, token: Optional[str] = None) -> WorkspaceRef:
+        if token:
+            ref = resolve_workspace(token, self.registry)
+        elif self.token:
+            ref = resolve_workspace(self.token, self.registry)
+        else:
+            ref = default_selection(path=self.registry)
+        if not ref.db_path.is_file():
+            raise FileNotFoundError(
+                f"index database does not exist: {ref.db_path}; run 'apsgraph scan' first")
+        return ref
+
+    def touch(self, ref: WorkspaceRef) -> bool:
+        """Mark a registered workspace as just used; unregistered sources are
+        a no-op because there is no entry to refresh."""
+        if ref.workspace_path is None:
+            return False
+        return touch_workspace(ref.workspace_path, self.registry)
+
+
 class WorkbenchServer(ThreadingHTTPServer):
     daemon_threads = True
     # http.server 默认 allow_reuse_address=1（SO_REUSEADDR）。Windows 的
@@ -902,9 +990,13 @@ class WorkbenchServer(ThreadingHTTPServer):
     # TIME_WAIT，因此仅在非 Windows 平台保留。
     allow_reuse_address = os.name != "nt"
 
-    def __init__(self, db_path: Path, port: int = WORKBENCH_PORT):
+    def __init__(self, db_path: Optional[Path] = None, port: int = WORKBENCH_PORT,
+                 workspace: Optional[str] = None, registry: Optional[Path] = None):
+        if db_path is not None:
+            self.router: Union[_SingleDbRouter, WorkspaceRouter] = _SingleDbRouter(db_path)
+        else:
+            self.router = WorkspaceRouter(workspace, registry)
         super().__init__(("127.0.0.1", port), WorkbenchHandler)
-        self.db_path = Path(db_path)
 
 
 def registry_path() -> Path:
@@ -1083,12 +1175,20 @@ def _install_sigterm_handler() -> None:
         pass  # not the main thread or unsupported platform
 
 
-def _instance_entry(server: WorkbenchServer, db_path: Path, url: str) -> Dict[str, Any]:
-    db_path = Path(db_path).resolve()
-    workspace = (db_path.parent.parent if db_path.parent.name == ".apsgraph"
-                 else db_path.parent)
+def _instance_entry(server: WorkbenchServer, db_path: Optional[Path],
+                    url: str) -> Dict[str, Any]:
+    if db_path is not None:
+        db_path = Path(db_path).resolve()
+        workspace = (db_path.parent.parent if db_path.parent.name == ".apsgraph"
+                     else db_path.parent)
+        db_value: Optional[str] = str(db_path)
+        workspace_value = str(Path(workspace).resolve())
+    else:
+        # Multi-workspace instance: no single index; record the launch dir.
+        db_value = None
+        workspace_value = str(Path.cwd().resolve())
     return {"port": int(server.server_port), "pid": os.getpid(), "url": url,
-            "db": str(db_path), "workspace": str(Path(workspace).resolve()),
+            "db": db_value, "workspace": workspace_value,
             "started_at": datetime.now().astimezone().isoformat(timespec="seconds")}
 
 
@@ -1105,8 +1205,9 @@ def _bind_workbench_server(db_path: Path, port: int) -> WorkbenchServer:
                          "use --port 0 to pick a random free port") from exc
 
 
-def _serve_workbench_server(server: WorkbenchServer, db_path: Path,
-                            open_browser: bool = True, progress=None) -> int:
+def _serve_workbench_server(server: WorkbenchServer, db_path: Optional[Path],
+                            open_browser: bool = True, progress=None,
+                            target: Optional[str] = None) -> int:
     _install_sigterm_handler()
     url = f"http://127.0.0.1:{server.server_port}/"
     try:
@@ -1115,7 +1216,7 @@ def _serve_workbench_server(server: WorkbenchServer, db_path: Path,
         if progress:
             progress(f"could not record workbench instance in registry: {exc}")
     if progress:
-        progress(f"workbench serving {db_path} at {url} (Ctrl+C to stop)")
+        progress(f"workbench serving {target or db_path} at {url} (Ctrl+C to stop)")
     if open_browser:
         threading.Timer(0.5, webbrowser.open, args=(url,)).start()
     try:
@@ -1132,16 +1233,38 @@ def _serve_workbench_server(server: WorkbenchServer, db_path: Path,
     return 0
 
 
-def serve_workbench(db_path: Path, port: int = 0,
-                    open_browser: bool = True, progress=None) -> int:
+def serve_workbench(db_path: Optional[Path] = None, port: int = 0,
+                    open_browser: bool = True, progress=None,
+                    workspace: Optional[str] = None) -> int:
     """Start the local workbench server; blocks until interrupted.
 
     ``port`` defaults to 0 — the OS assigns a random free port so several
     workspaces can be served at the same time; the effective port is reported
     in the URL and recorded in the instance registry.  Pass an explicit port
     (e.g. ``WORKBENCH_PORT``) for a fixed address.
+
+    With an explicit ``db_path`` the server serves that one index (legacy
+    ``--db`` mode).  Otherwise it serves every workspace registered in
+    ``~/.apsgraph/registry.json``; ``workspace`` preselects one, and the UI
+    can switch between all of them without a restart.
     """
-    db_path = Path(db_path)
-    server = _bind_workbench_server(db_path, port)
-    return _serve_workbench_server(server, db_path, open_browser=open_browser,
-                                   progress=progress)
+    if db_path is not None:
+        db_path = Path(db_path)
+        server = _bind_workbench_server(db_path, port)
+        return _serve_workbench_server(server, db_path, open_browser=open_browser,
+                                       progress=progress)
+    # Multi-workspace mode: fail fast on an unknown --workspace token or an
+    # empty registry before binding the port; per-workspace staleness stays
+    # fail-soft (selectable entries explain themselves in the UI).
+    probe = WorkspaceRouter(workspace)
+    ref = probe.resolve(None)
+    connect(ref.db_path, read_only=True).close()
+    count = len(workspace_overview())
+    try:
+        server = WorkbenchServer(db_path=None, port=port, workspace=workspace)
+    except OSError as exc:
+        raise ValueError(f"cannot bind 127.0.0.1:{port}: {exc}; "
+                         "use --port 0 to pick a random free port") from exc
+    return _serve_workbench_server(server, None, open_browser=open_browser,
+                                   progress=progress,
+                                   target=f"{count} registered workspace(s)")

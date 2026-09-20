@@ -21,6 +21,11 @@ class CliTest(unittest.TestCase):
         self.db = Path(self.tmp.name) / "index.db"
         conn = connect(self.db)
         conn.close()
+        # scan 会写全局注册表；测试统一重定向到临时目录，避免污染真实 ~/.apsgraph
+        self.registry_home = Path(self.tmp.name) / "apsgraph-home"
+        patcher = mock.patch.dict(os.environ, {"APSGRAPH_HOME": str(self.registry_home)})
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -110,6 +115,54 @@ class CliTest(unittest.TestCase):
 
         self.assertEqual(0, rc)
         self.assertTrue((workspace / ".apsgraph/apsgraph.db").is_file())
+
+    def _make_scan_workspace(self, name):
+        from apsgraph.scanner import scan_workspace as _scan
+
+        workspace = Path(self.tmp.name) / name
+        model = workspace / "tables/Demo.tables.xml"
+        model.parent.mkdir(parents=True)
+        model.write_text(
+            '<schema id="Demo" package="p"><table id="t" name="t"><fields/></table></schema>',
+            encoding="utf-8")
+        return workspace
+
+    def test_scan_registers_workspace_in_global_registry(self):
+        from apsgraph.registry import load_registry
+
+        workspace = self._make_scan_workspace("reg-repo")
+        rc = main(["scan", "--workspace", str(workspace), "--db", str(self.db)])
+        self.assertEqual(0, rc)
+
+        payload = load_registry()
+        self.assertEqual(1, len(payload["workspaces"]))
+        entry = payload["workspaces"][0]
+        self.assertEqual("reg-repo", entry["name"])
+        self.assertEqual(str(workspace.resolve()), entry["workspacePath"])
+        self.assertEqual(str(self.db.resolve()), entry["dbPath"])
+        self.assertTrue(entry["lastScanAt"])
+
+        # 重复 scan 是刷新而非新增
+        main(["scan", "--workspace", str(workspace), "--db", str(self.db)])
+        self.assertEqual(1, len(load_registry()["workspaces"]))
+
+    def test_scan_no_register_skips_registry(self):
+        from apsgraph.registry import load_registry
+
+        workspace = self._make_scan_workspace("skip-repo")
+        rc = main(["scan", "--workspace", str(workspace), "--db", str(self.db), "--no-register"])
+        self.assertEqual(0, rc)
+        self.assertEqual({"version": 1, "workspaces": []}, load_registry())
+        self.assertFalse((self.registry_home / "registry.json").exists())
+
+    def test_scan_failed_run_does_not_register(self):
+        from apsgraph.registry import load_registry
+
+        empty = Path(self.tmp.name) / "empty-workspace"
+        empty.mkdir()
+        rc = main(["scan", "--workspace", str(empty), "--db", str(self.db)])
+        self.assertEqual(2, rc)
+        self.assertEqual({"version": 1, "workspaces": []}, load_registry())
 
     def test_scan_stderr_summary_and_show_warning_flag(self):
         import contextlib

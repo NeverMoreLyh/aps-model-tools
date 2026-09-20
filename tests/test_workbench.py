@@ -9,6 +9,7 @@ import urllib.request
 from pathlib import Path
 from unittest import mock
 
+from apsgraph.registry import touch_workspace, upsert_workspace
 from apsgraph.scanner import scan_workspace
 from apsgraph.store import connect
 from apsgraph.workbench import (
@@ -775,6 +776,153 @@ class WorkbenchRegistryTest(WorkbenchTestBase):
             self.assertFalse(thread.is_alive())
             self.assertTrue(self._wait_for(lambda: not self._read_registry()))
             self.assertEqual([], self._read_registry())
+
+
+class WorkbenchMultiWorkspaceHttpTest(unittest.TestCase):
+    """多 workspace 全局模式：?ws= 路由、默认选中、失效标注与 fail-closed。"""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.tmp = Path(tmp.name)
+        self.registry = self.tmp / "apsgraph-home" / "registry.json"
+        self.workspaces = {}
+        for name, table in (("alpha", "table_a"), ("beta", "table_b")):
+            root = self.tmp / name
+            model = root / "tables/Demo.tables.xml"
+            model.parent.mkdir(parents=True)
+            model.write_text(
+                '<schema id="Demo" package="p"><table id="%s" name="%s"><fields/></table></schema>'
+                % (table, table), encoding="utf-8")
+            db = root / "index.db"
+            scan_workspace(root, db)
+            upsert_workspace(root, db, path=self.registry)
+            self.workspaces[name] = root
+        # beta 最后被使用：裸跑默认选中它（避免同秒扫描的时间戳并列）
+        touch_workspace(self.workspaces["beta"], path=self.registry)
+        # 默认选中逻辑会探测 cwd；测试统一切到无索引的空目录，保证确定性
+        cwd = self.tmp / "no-cwd-index"
+        cwd.mkdir()
+        self.old_cwd = Path.cwd()
+        os.chdir(cwd)
+        self.addCleanup(os.chdir, self.old_cwd)
+
+        self.server = WorkbenchServer(db_path=None, port=0, registry=self.registry)
+        thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(self.server.server_close)
+        self.addCleanup(self.server.shutdown)
+        self.base_url = f"http://127.0.0.1:{self.server.server_port}"
+
+    def _get(self, path):
+        request = urllib.request.Request(self.base_url + path)
+        try:
+            with urllib.request.urlopen(request) as response:
+                return response.status, response.read()
+        except urllib.error.HTTPError as exc:
+            return exc.code, exc.read()
+
+    def test_workspaces_endpoint_lists_entries_and_default(self):
+        status, body = self._get("/api/workspaces")
+        self.assertEqual(200, status)
+        payload = json.loads(body)
+        self.assertEqual("multi", payload["mode"])
+        self.assertEqual({"alpha", "beta"}, {item["name"] for item in payload["workspaces"]})
+        self.assertTrue(all(item["available"] for item in payload["workspaces"]))
+        self.assertEqual(str(self.workspaces["beta"].resolve()), payload["default"])
+
+    def test_search_routes_to_selected_workspace(self):
+        alpha, beta = self.workspaces["alpha"], self.workspaces["beta"]
+        status, body = self._get(
+            "/api/search?group=table&q=table_a&field=id&ws=" + urllib.request.quote(str(alpha)))
+        self.assertEqual(200, status)
+        self.assertEqual(1, json.loads(body)["total"])
+
+        # 同一查询切到 beta：索引不同，查不到 alpha 的表
+        status, body = self._get(
+            "/api/search?group=table&q=table_a&field=id&ws=" + urllib.request.quote(str(beta)))
+        self.assertEqual(200, status)
+        self.assertEqual(0, json.loads(body)["total"])
+
+        # ws 也接受注册名
+        status, body = self._get("/api/search?group=table&q=table_b&field=id&ws=beta")
+        self.assertEqual(200, status)
+        self.assertEqual(1, json.loads(body)["total"])
+
+    def test_requests_without_ws_use_server_default(self):
+        status, body = self._get("/api/search?group=table&field=id")
+        self.assertEqual(200, status)
+        payload = json.loads(body)
+        # 默认 workspace 是 beta（最后使用），只能查到 table_b
+        self.assertEqual(1, payload["total"])
+        self.assertEqual("table_b", payload["results"][0]["raw_id"])
+
+    def test_dashboard_request_touches_last_used(self):
+        from apsgraph.registry import load_registry
+
+        alpha = self.workspaces["alpha"]
+        status, _ = self._get("/api/dashboard?ws=" + urllib.request.quote(str(alpha)))
+        self.assertEqual(200, status)
+        entry = load_registry(self.registry)["workspaces"][0]
+        self.assertEqual("alpha", entry["name"])
+        self.assertTrue(entry["lastUsedAt"])
+
+    def test_stale_workspace_listed_but_fails_closed_on_use(self):
+        gamma = self.tmp / "gamma"
+        model = gamma / "tables/Demo.tables.xml"
+        model.parent.mkdir(parents=True)
+        model.write_text(
+            '<schema id="Demo" package="p"><table id="table_g" name="table_g"><fields/></table></schema>',
+            encoding="utf-8")
+        db = gamma / "index.db"
+        scan_workspace(gamma, db)
+        upsert_workspace(gamma, db, path=self.registry)
+        db.unlink()  # 索引事后被删除
+
+        status, body = self._get("/api/workspaces")
+        payload = json.loads(body)
+        gamma_entry = next(item for item in payload["workspaces"] if item["name"] == "gamma")
+        self.assertFalse(gamma_entry["available"])
+
+        status, body = self._get("/api/dashboard?ws=" + urllib.request.quote(str(gamma)))
+        self.assertEqual(400, status)
+        self.assertIn("index database does not exist", json.loads(body)["error"])
+        self.assertIn("apsgraph scan", json.loads(body)["error"])
+
+    def test_unknown_ws_token_rejected(self):
+        status, body = self._get("/api/dashboard?ws=nope")
+        self.assertEqual(400, status)
+        self.assertIn("unknown workspace: nope", json.loads(body)["error"])
+
+    def test_ambiguous_name_rejected(self):
+        from apsgraph.registry import load_registry, save_registry
+
+        payload = load_registry(self.registry)
+        payload["workspaces"][0]["name"] = "dup"
+        payload["workspaces"][1]["name"] = "dup"
+        save_registry(payload, self.registry)
+        status, body = self._get("/api/dashboard?ws=dup")
+        self.assertEqual(400, status)
+        self.assertIn("ambiguous workspace name: dup", json.loads(body)["error"])
+
+    def test_single_db_mode_reports_single(self):
+        server = WorkbenchServer(self.workspaces["alpha"] / "index.db", 0)
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        request = urllib.request.Request(f"http://127.0.0.1:{server.server_port}/api/workspaces")
+        with urllib.request.urlopen(request) as response:
+            payload = json.loads(response.read())
+        self.assertEqual({"mode": "single"}, payload)
+
+    def test_serve_workbench_multi_fails_closed_without_registry_or_cwd_index(self):
+        with self.assertRaises(FileNotFoundError):
+            serve_workbench(db_path=None, open_browser=False)
+
+    def test_serve_workbench_rejects_unknown_workspace_token(self):
+        with self.assertRaises(ValueError):
+            serve_workbench(db_path=None, open_browser=False, workspace="nope")
 
 
 if __name__ == "__main__":

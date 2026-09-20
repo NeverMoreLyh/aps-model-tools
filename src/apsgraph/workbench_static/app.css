@@ -19,6 +19,14 @@ body { font: 14px/1.5 -apple-system, "PingFang SC", "Microsoft YaHei", sans-seri
 .brand button { background: none; border: 1px solid #343b4a; color: #e8eaee; border-radius: 4px; cursor: pointer; font-size: 13px; padding: 2px 6px; }
 .brand button:hover { background: #2b3242; }
 .brand-sub { font-size: 12px; font-weight: 400; color: #9aa3b2; }
+#workspace-bar { padding: 0 12px 10px; }
+#workspace-bar select {
+  width: 100%; font: inherit; font-size: 12px; padding: 4px 6px;
+  border-radius: 6px; border: 1px solid #343b4a; background: #2b3242; color: #e8eaee;
+}
+#workspace-bar option { color: var(--text); background: #fff; }
+#workspace-bar option.ws-stale { color: #cf222e; }
+#layout.nav-collapsed #workspace-bar { display: none; }
 #nav-list { list-style: none; margin: 0; padding: 0; }
 #nav-list li { padding: 8px 16px; cursor: pointer; border-left: 3px solid transparent; }
 #nav-list li:hover { background: #2b3242; }

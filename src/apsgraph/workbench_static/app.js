@@ -41,6 +41,7 @@ const BATCH_KIND_LABELS = {
 };
 
 const state = {
+  ws: "",
   pageId: "top", group: "top", query: "", dimension: "", kinds: [],
   page: 1, total: 0, pageSize: 50, selected: null,
 };
@@ -52,11 +53,47 @@ function esc(value) {
     .replace(/"/g, "&quot;");
 }
 async function api(path, params) {
-  const url = path + (params ? "?" + new URLSearchParams(params) : "");
-  const response = await fetch(url);
+  const merged = Object.assign({}, params || {});
+  if (state.ws) merged.ws = state.ws;
+  const query = new URLSearchParams(merged).toString();
+  const response = await fetch(query ? `${path}?${query}` : path);
   const payload = await response.json();
   if (!response.ok) throw new Error(payload.error || response.statusText);
   return payload;
+}
+
+/* ---------- workspace 切换 ---------- */
+/* 服务端每次请求都重读全局注册表：workbench 开着时新 scan 的仓库，
+   点开下拉（触发刷新）即可切换，无需重启服务。 */
+async function refreshWorkspaces() {
+  const bar = $("#workspace-bar");
+  let payload;
+  try {
+    payload = await api("/api/workspaces");
+  } catch (error) {
+    return; /* 注册表不可用时保持现状；请求级错误会在页面中展示 */
+  }
+  const select = $("#workspace-select");
+  if (payload.mode !== "multi" || !(payload.workspaces || []).length) {
+    bar.classList.add("hidden");
+    return;
+  }
+  select.innerHTML = payload.workspaces.map((item) => {
+    const label = `${item.name}${item.available ? "" : "（失效）"}`;
+    const title = `${item.workspacePath} · 最后扫描 ${item.lastScanAt || "—"}`;
+    return `<option value="${esc(item.workspacePath)}" title="${esc(title)}"${item.available ? "" : " class=\"ws-stale\""}>${esc(label)}</option>`;
+  }).join("");
+  bar.classList.remove("hidden");
+  if (!state.ws && payload.default) state.ws = payload.default;
+  select.value = state.ws;
+}
+
+function switchWorkspace(value) {
+  state.ws = value;
+  $("#detail-pane").innerHTML = "";
+  detailHistory.stack = [];
+  detailHistory.current = null;
+  switchPage("dashboard");
 }
 
 /* ---------- 导航 ---------- */
@@ -860,6 +897,10 @@ async function init() {
   $("#btn-next").addEventListener("click", () => { state.page += 1; runSearch(); });
   $("#kind-select").addEventListener("change", () => { state.page = 1; runSearch(); });
   $("#dimension").addEventListener("change", () => { state.page = 1; runSearch(); });
+  const workspaceSelect = $("#workspace-select");
+  workspaceSelect.addEventListener("change", () => switchWorkspace(workspaceSelect.value));
+  workspaceSelect.addEventListener("mousedown", () => { refreshWorkspaces(); });
+  await refreshWorkspaces();
   switchPage("dashboard");
 }
 

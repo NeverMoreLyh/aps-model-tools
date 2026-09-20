@@ -1,6 +1,6 @@
 # APSGraph 使用说明
 
-> 版本：0.42.0
+> 版本：0.43.0
 > 更新时间：2026-09-20
 > 项目地址：https://github.com/NeverMoreLyh/aps-model-tools
 
@@ -520,7 +520,8 @@ apsgraph workbench close --all              # 停止当前用户的全部实例
 ```
 
 - 每个实例启动时把自己的端口、PID、URL、索引路径、工作区路径与启动时间记录到用户级实例注册表 `~/.apsgraph/workbench-registry.json`（可用环境变量 `APSGRAPH_WORKBENCH_REGISTRY` 覆盖），正常退出（Ctrl+C 或 SIGTERM）时自动移除。
-- `workbench list` 输出 JSON：存活实例按端口排序，同时探测 PID 存活且 `/api/stats` 可响应；过期条目（进程已退出或端口不再服务 workbench）在列出时自动清理并计入 `pruned_stale`。
+- 两个命令默认人类可读输出（`list` 为对齐表格，`close` 为逐实例单行报告，stderr 附汇总），加 `--json` 输出机器可读 JSON。
+- `workbench list`：存活实例按端口排序，同时探测 PID 存活且 `/api/stats` 可响应；过期条目（进程已退出或端口不再服务 workbench）在列出时自动清理并计入 `pruned_stale`。
 - `workbench close` 只终止当前仍在响应 workbench API 的进程：pid 已失效的条目按 `already_stopped` 清理；pid 存活但端口已不再服务 workbench（pid 被复用或端口被其他程序占用）的条目按 `stale` 清理且不会误杀无关进程；指定端口不存在于注册表时返回 `not_found` 并以退出码 2 结束。
 - 注册表为用户级共享，因此可在任意目录下查看和关闭其他文件夹中启动的 workbench 实例。
 

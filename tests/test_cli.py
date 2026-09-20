@@ -242,16 +242,24 @@ class CliTest(unittest.TestCase):
     def test_workbench_list_and_close_argument_rules(self):
         registry = Path(self.tmp.name) / "wb-registry.json"
         with mock.patch.dict(os.environ, {"APSGRAPH_WORKBENCH_REGISTRY": str(registry)}):
+            # 默认 human 表格；空注册表输出表头
             output = io.StringIO()
             with contextlib.redirect_stdout(output):
                 rc = main(["workbench", "list"])
             self.assertEqual(0, rc)
-            self.assertEqual([], json.loads(output.getvalue())["instances"])
+            self.assertIn("PORT", output.getvalue())
+            self.assertNotIn('"instances"', output.getvalue())
 
-            # close 未注册端口 → rc 2 且报告 not_found
             output = io.StringIO()
             with contextlib.redirect_stdout(output):
-                rc = main(["workbench", "close", "--port", "8321"])
+                rc = main(["workbench", "list", "--json"])
+            self.assertEqual(0, rc)
+            self.assertEqual([], json.loads(output.getvalue())["instances"])
+
+            # close 未注册端口 → rc 2 且报告 not_found（--json）
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                rc = main(["workbench", "close", "--port", "8321", "--json"])
             self.assertEqual(2, rc)
             self.assertEqual([8321], json.loads(output.getvalue())["not_found"])
 
@@ -287,12 +295,28 @@ class CliTest(unittest.TestCase):
                 mock.patch("apsgraph.workbench._terminate_pid") as terminate:
             output = io.StringIO()
             with contextlib.redirect_stdout(output):
-                rc = main(["workbench", "close", "--port", str(server.server_port)])
+                rc = main(["workbench", "close", "--port", str(server.server_port), "--json"])
 
         self.assertEqual(0, rc)
         payload = json.loads(output.getvalue())
         self.assertEqual([server.server_port], [e["port"] for e in payload["closed"]])
         terminate.assert_called_once_with(os.getpid())
+
+        # 默认 human 输出：单行 stopped 确认
+        register_workbench(
+            {"port": server.server_port, "pid": os.getpid(),
+             "url": f"http://127.0.0.1:{server.server_port}/", "db": str(self.db),
+             "workspace": str(self.tmp.name), "started_at": "t"},
+            path=registry)
+        with mock.patch.dict(os.environ, {REGISTRY_ENV: str(registry)}), \
+                mock.patch("apsgraph.workbench._terminate_pid"):
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                rc = main(["workbench", "close", "--port", str(server.server_port)])
+        self.assertEqual(0, rc)
+        self.assertIn("stopped", output.getvalue())
+        self.assertIn(f"pid {os.getpid()}", output.getvalue())
+        self.assertNotIn('"closed"', output.getvalue())
 
 
 if __name__ == "__main__":

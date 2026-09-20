@@ -27,7 +27,7 @@ A change that alters behavior must update the applicable document before release
 ## 3. Code and test requirements
 
 - Keep the core CLI usable with Python 3.9+ and no mandatory third-party runtime dependency.
-- Preserve machine-readable JSON on stdout (the `apsgraph workspace` maintenance family prints human-readable tables by default and JSON via `--json`).
+- Preserve machine-readable JSON on stdout (the `apsgraph workspace` maintenance family and the `workbench list`/`workbench close` instance commands print human-readable output by default and JSON via `--json`).
 - Send human-facing stage and progress logs to stderr.
 - Preserve fail-closed behavior for Maven build failure, coordinate version conflicts, JDK conflicts, and unsafe index replacement.
 - Existing indexes must remain untouched when a build, dependency resolution, or import fails.

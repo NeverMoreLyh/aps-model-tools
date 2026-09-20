@@ -1,6 +1,6 @@
 # APSGraph 运维说明文档
 
-> 版本：0.42.0
+> 版本：0.43.0
 > 更新时间：2026-09-20
 > 文档定位：说明安装发布、索引巡检、故障处理、备份回滚和 CI 使用。
 
@@ -118,7 +118,7 @@ apsgraph workspace rebuild --all   # scanner 版本升级或索引损坏后的�
 
 报 `index database does not exist` 时先对目标工作区执行 `apsgraph scan`，或用 `--db` 指向正确索引；多 workspace 模式下该错误意味着默认选中 workspace 的索引缺失，重新对其 `scan` 或在页面选择器中切换到其他 workspace。报 `no registered workspaces` 时表示 workspace 注册表为空且当前目录无索引，先 `scan`。报 `unknown workspace` 时按错误信息中的注册名列表修正 `--workspace`；同名注册项冲突时改用 workspace 路径指定。默认即绑定随机空闲端口，多实例互不冲突；显式 `--port N` 指定的端口被占用时报错退出（不会自动降级换端口）；`--no-browser` 可在无桌面环境的 CI/远程主机上只打印 URL 不拉起浏览器。
 
-需要同时打开多个工作区时，为每个工作区分别执行 `apsgraph workbench --port 0`，然后用 `apsgraph workbench list` 查看全部实例（端口、PID、工作区），用 `apsgraph workbench close --port N`（或 `--all`）关闭；该命令读取用户级注册表 `~/.apsgraph/workbench-registry.json`（可用 `APSGRAPH_WORKBENCH_REGISTRY` 覆盖），过期条目（进程已退出）会在 list 时自动清理。若怀疑注册表条目过期，直接重新执行 `workbench list` 即可自愈，无需手工编辑该文件。跨仓库查询优先使用多 workspace 模式：一个实例即可切换全部已注册工作区，无需逐个启动。
+需要同时打开多个工作区时，为每个工作区分别执行 `apsgraph workbench --port 0`，然后用 `apsgraph workbench list` 查看全部实例（端口、PID、工作区；默认人类可读表格，`--json` 供脚本），用 `apsgraph workbench close --port N`（或 `--all`）关闭；该命令读取用户级注册表 `~/.apsgraph/workbench-registry.json`（可用 `APSGRAPH_WORKBENCH_REGISTRY` 覆盖），过期条目（进程已退出）会在 list 时自动清理。若怀疑注册表条目过期，直接重新执行 `workbench list` 即可自愈，无需手工编辑该文件。跨仓库查询优先使用多 workspace 模式：一个实例即可切换全部已注册工作区，无需逐个启动。
 
 ### 6.5 注册表损坏或 workspace 失效
 

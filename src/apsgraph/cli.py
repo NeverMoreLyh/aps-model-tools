@@ -315,14 +315,18 @@ def build_parser() -> argparse.ArgumentParser:
     workbench.add_argument("--no-browser", action="store_true",
                            help="do not open the default browser automatically")
     workbench_subs = workbench.add_subparsers(dest="wb_command")
-    workbench_subs.add_parser(
+    wb_list = workbench_subs.add_parser(
         "list", help="list running workbench instances (port, PID, workspace, index)")
+    wb_list.add_argument("--json", action="store_true",
+                         help="emit machine-readable JSON instead of a human-readable table")
     wb_close = workbench_subs.add_parser(
         "close", help="stop a running workbench instance recorded in the instance registry")
     wb_close.add_argument("--port", type=_port_number, dest="close_port", metavar="PORT",
                           help="port of the instance to stop")
     wb_close.add_argument("--all", action="store_true", dest="close_all",
                           help="stop every running instance")
+    wb_close.add_argument("--json", action="store_true",
+                          help="emit machine-readable JSON instead of a human-readable report")
 
     ws_cmd = sub.add_parser(
         "workspace",
@@ -506,6 +510,30 @@ def _render_workspace_results(action: str, results: List[Dict[str, Any]]) -> str
     return _render_table(headers, rows)
 
 
+def _render_workbench_list(instances: List[Dict[str, Any]]) -> str:
+    rows = [[item.get("port", "—"), item.get("pid", "—"), item.get("url", "—"),
+             item.get("workspace") or "—", item.get("started_at") or "—"]
+            for item in instances]
+    return _render_table(["PORT", "PID", "URL", "WORKSPACE", "STARTED"], rows)
+
+
+def _print_workbench_close(result: Dict[str, Any]) -> None:
+    """Human-readable close report; error output stays on the JSON channel."""
+    for entry in result.get("closed", []):
+        print(f"stopped {entry.get('url', '127.0.0.1:' + str(entry.get('port')))}"
+              f" (pid {entry.get('pid')})")
+    for entry in result.get("already_stopped", []):
+        print(f"already stopped: {entry.get('url', 'port ' + str(entry.get('port')))}")
+    for entry in result.get("stale", []):
+        print(f"stale entry pruned: {entry.get('url', 'port ' + str(entry.get('port')))}"
+              " (no longer serving the workbench API)")
+    for entry in result.get("failed", []):
+        print(f"failed to stop {entry.get('url', 'port ' + str(entry.get('port')))}"
+              f": {entry.get('error')}")
+    for port in result.get("not_found", []):
+        print(f"no running instance on port {port}")
+
+
 def _run_workspace_command(args: argparse.Namespace) -> int:
     """Dispatch the `apsgraph workspace` maintenance family.
 
@@ -616,7 +644,14 @@ def main(argv: Optional[List[str]] = None) -> int:
             return serve_stdio(args.db, args.workspace)
         if args.command == "workbench":
             if args.wb_command == "list":
-                _json(list_workbenches(progress=_progress))
+                payload = list_workbenches(progress=_progress)
+                if args.json:
+                    _json(payload)
+                else:
+                    print(_render_workbench_list(payload["instances"]))
+                    pruned = payload.get("pruned_stale", 0)
+                    summary = f"[apsgraph] {len(payload['instances'])} 个运行实例"
+                    print(f"{summary}，清理 {pruned} 个过期条目" if pruned else summary)
                 return 0
             if args.wb_command == "close":
                 if args.close_port is None and not args.close_all:
@@ -627,7 +662,13 @@ def main(argv: Optional[List[str]] = None) -> int:
                     return 2
                 result = close_workbenches(port=args.close_port,
                                            close_all=args.close_all, progress=_progress)
-                _json(result)
+                if args.json:
+                    _json(result)
+                else:
+                    _print_workbench_close(result)
+                    closed = len(result["closed"])
+                    print(f"[apsgraph] 已停止 {closed} 个实例"
+                          if closed else "[apsgraph] 没有实例被停止")
                 return 0 if not result["not_found"] and not result["failed"] else 2
             return serve_workbench(args.db, args.port,
                                    open_browser=not args.no_browser, progress=_progress,

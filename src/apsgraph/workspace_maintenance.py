@@ -17,7 +17,9 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from .registry import _match_entry, load_registry, upsert_workspace
+from .registry import (
+    _match_entry, entry_id, load_registry, registered_names, upsert_workspace,
+)
 from .scanner import scan_workspace, sync_workspace, workspace_status
 from .store import connect
 
@@ -35,13 +37,14 @@ def select_targets(token: Optional[str], select_all: bool,
         raise ValueError("either --workspace NAME|PATH or --all is required")
     entry = _match_entry(payload, token)
     if entry is None:
-        names = ", ".join(item["name"] for item in payload["workspaces"]) or "（无）"
-        raise ValueError(f"unknown workspace: {token}; registered workspaces: {names}")
+        raise ValueError(f"unknown workspace: {token}; registered workspaces: "
+                         f"{registered_names(payload['workspaces'])}")
     return [dict(entry)]
 
 
 def _result(entry: Dict[str, Any], **fields: Any) -> Dict[str, Any]:
-    result = {"name": entry["name"], "workspace": entry["workspacePath"],
+    result = {"id": entry.get("id") or entry_id(entry["workspacePath"]),
+              "name": entry["name"], "workspace": entry["workspacePath"],
               "db": entry["dbPath"]}
     result.update(fields)
     return result

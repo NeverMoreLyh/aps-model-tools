@@ -1,6 +1,6 @@
 # APSGraph 需求文档
 
-> 版本：0.41.0
+> 版本：0.42.0
 > 更新时间：2026-09-20  
 > 文档定位：本文件是 APSGraph 的长期需求基线，汇总产品定位、用户需求、功能需求、非功能需求与演进需求。新增需求必须先更新本文，再进入设计与实现。
 
@@ -116,7 +116,7 @@ APSGraph 不修改业务源码，不执行 DDL，不写入 CodeGraph 数据库�
 
 - `scan` 成功发布索引后自动把 workspace 注册到全局注册表 `~/.apsgraph/registry.json`（与实例注册表 `workbench-registry.json` 相互独立）；`--no-register` 可跳过注册。
 - 注册表以 workspace 绝对路径为唯一键：重复扫描同一 workspace 是刷新（更新 `dbPath`、`lastScanAt`）而非新增；显示名 `name` 默认取目录 basename，允许重名。
-- 注册表字段：`name`、`workspacePath`、`dbPath`、`lastScanAt`、`lastUsedAt`。
+- 注册表字段：`id`（workspace 解析路径的 SHA-1 前 8 位十六进制短 id，确定性——同一路径恒得同一 id，注册表重建后保持稳定，旧条目由读取方即时计算兜底）、`name`、`workspacePath`、`dbPath`、`lastScanAt`、`lastUsedAt`。
 - 注册只发生在成功的 `scan`；`sync` 与失败的 `scan` 不修改注册表。
 - 注册表写入采用临时文件 + 原子替换；注册表文件损坏或结构非法时 fail-closed 报错，不得静默重建。
 - workbench 服务 workspace 时刷新被使用注册 workspace 的 `lastUsedAt`；该刷新失败只记录 stderr 警告，不中断浏览。
@@ -126,7 +126,7 @@ APSGraph 不修改业务源码，不执行 DDL，不写入 CodeGraph 数据库�
 
 - `workbench` 不带 `--db` 时进入多 workspace 模式：读取全局注册表，在同一个本地服务内提供所有已注册 workspace 的查询，UI 侧栏提供 workspace 下拉选择器（展示名称与最后扫描时间，索引已失效的条目标注"失效"并灰显）。
 - 裸跑 `workbench` 的默认选中顺序：当前目录是已注册 workspace → 选中它；否则当前目录存在 `.apsgraph/apsgraph.db` → 选中当前目录；否则选中上次使用的（`lastUsedAt` 最新，其次 `lastScanAt` 最新）；注册表为空且当前目录无索引时 fail-closed 提示先 `scan`。
-- `--workspace <名称|路径>` 启动直达：先按注册表 name 精确匹配（重名命中多个时报错并列出候选路径），再按解析后的 workspace 路径匹配；指向真实存在目录但未注册时，若 `<目录>/.apsgraph/apsgraph.db` 存在则按只读方式直接服务（不自动注册）；均未命中时报错并列出可用注册名。
+- `--workspace <id|名称|路径>` 启动直达：先按注册表 id 精确匹配，再按 name 精确匹配（重名命中多个时报错并列出带 id 的候选），再按解析后的 workspace 路径匹配；指向真实存在目录但未注册时，若 `<目录>/.apsgraph/apsgraph.db` 存在则按只读方式直接服务（不自动注册）；均未命中时报错并列出可用注册名（name(id) 形式）。
 - 显式 `--db` 时保持单索引模式（优先级最高），不读 workspace 注册表；随机端口与实例注册行为与单索引模式一致。
 - 服务端每个请求重新读取注册表：workbench 运行中新 `scan` 的 workspace 无需重启即可切换。
 - 注册表中索引已失效的条目在列表中正常展示但标注失效；选中时 fail-closed 报错提示重新 `scan`，条目不自动剔除。
@@ -134,7 +134,7 @@ APSGraph 不修改业务源码，不执行 DDL，不写入 CodeGraph 数据库�
 
 ### R20b workspace 维护命令族
 
-- 提供二级命令族 `apsgraph workspace <action>`，基于全局 workspace 注册表对注册 workspace 做条目管理与索引维护；命令目标必须显式：单目标 `--workspace <名称|路径>`（仅在注册表内匹配：name 精确、重名报错列候选、路径精确匹配；不适用 workbench 的未注册目录宽松直开规则），批量 `--all`（注册表为空时报错）。
+- 提供二级命令族 `apsgraph workspace <action>`，基于全局 workspace 注册表对注册 workspace 做条目管理与索引维护；命令目标必须显式：单目标 `--workspace <id|名称|路径>`（仅在注册表内匹配：id 精确、name 精确、重名报错列带 id 候选、路径精确匹配；不适用 workbench 的未注册目录宽松直开规则），批量 `--all`（注册表为空时报错）。
 - `workspace list`（只读）：列出全部注册条目（name、workspacePath、dbPath、lastScanAt、lastUsedAt、索引可用性），按最近使用排序。
 - `workspace remove --workspace <token>`（写注册表）：删除注册条目；`--purge` 显式声明时先删除该 workspace 的 `.apsgraph/` 缓存目录再删条目（索引文件是用户数据，未指定 `--purge` 时绝不触碰）；未注册 token 报错退出，不允许静默成功。
 - `workspace status --all|--workspace`（只读）：逐 workspace 报告 `missing`（索引或源码目录缺失，附 detail）/ `stale`（源码有变更，附 added/modified/deleted，复用现有 change-set 逻辑）/ `fresh` 三态。
@@ -142,7 +142,8 @@ APSGraph 不修改业务源码，不执行 DDL，不写入 CodeGraph 数据库�
 - `workspace check --all|--workspace`（只读）：索引健康检查——以只读方式打开（继承 APS 索引身份与 schema 版本校验）并执行 `PRAGMA integrity_check`，输出 `ok` / `missing` / `corrupt` 及 schema 版本。
 - `workspace rebuild --all|--workspace`（写索引）：全量重建，薄包装现有 `scan_workspace`（staging + 原子替换继承），成功后刷新对应注册条目的 `lastScanAt` 与 `dbPath`。
 - `workspace vacuum --all|--workspace`（写索引）：对索引原地执行 VACUUM（执行前先校验 APS 索引身份；SQLite 事务性保证中断不损坏索引）；数据库被占用（如正被 workbench 服务）时该 workspace 记为失败，不得阻塞其他 workspace。
-- 批量动作统一 fail-soft：逐 workspace 执行，单点失败（含损坏、锁定、目录缺失导致的无法执行）记录进结果继续其余；stdout 输出 JSON（`results` 数组 + `ok` 汇总标志），任一 workspace 失败则退出码 2。报告型结果（missing/stale/fresh/ok）不算执行失败。
+- 批量动作统一 fail-soft：逐 workspace 执行，单点失败（含损坏、锁定、目录缺失导致的无法执行）记录进结果继续其余；任一 workspace 失败则退出码 2。报告型结果（missing/stale/fresh/ok）不算执行失败。
+- 输出格式：本命令族默认输出人类可读的对齐表格（list/status/check/sync/rebuild/vacuum）或单行确认（remove，含失败 stderr 汇总行），`--json` 输出机器可读 JSON（`results` 数组 + `ok` 汇总标志 / `workspaces` / `removed`）；表格必须对中文全角字符做终端列宽对齐，错误信息在 NOTE 列截断展示。这是 stdout 机器可读 JSON 总约定中 workspace 族按需人类化的显式例外。
 - 本命令族明确不提供：注册条目重命名、孤儿索引扫描、check 后自动修复（修复走 `rebuild`）。
 
 ### R18 版本与发布流程

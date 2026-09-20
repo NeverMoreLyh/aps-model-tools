@@ -1,6 +1,6 @@
 # APSGraph 运维说明文档
 
-> 版本：0.41.0
+> 版本：0.42.0
 > 更新时间：2026-09-20
 > 文档定位：说明安装发布、索引巡检、故障处理、备份回滚和 CI 使用。
 
@@ -78,10 +78,10 @@ apsgraph status --workspace /path/to/workspace
 apsgraph stats --db /path/to/workspace/.apsgraph/apsgraph.db
 ```
 
-多仓库巡检（基于全局注册表，一次覆盖所有已注册 workspace）：
+多仓库巡检（基于全局注册表，一次覆盖所有已注册 workspace；默认人类可读表格，加 `--json` 输出机器可读格式供流水线消费）：
 
 ```bash
-apsgraph workspace list          # 注册条目与索引可用性总览
+apsgraph workspace list          # 注册条目与索引可用性总览（同名目录用短 id 区分）
 apsgraph workspace status --all  # 逐仓库报告 fresh / stale / missing
 apsgraph workspace check --all   # 索引健康（schema 版本 + integrity_check）
 ```
@@ -122,7 +122,7 @@ apsgraph workspace rebuild --all   # scanner 版本升级或索引损坏后的�
 
 ### 6.5 注册表损坏或 workspace 失效
 
-`invalid workspace registry` 报错说明 `~/.apsgraph/registry.json` 损坏或结构非法：修正或删除该文件后重新 `scan` 各 workspace 即可重建，不影响任何已构建索引。workbench 选择器中标注"（失效）"的条目表示其索引文件已不存在，对该 workspace 重新 `scan` 即可恢复；条目不会自动剔除。确认不再需要的条目用 `apsgraph workspace remove --workspace <token>` 移除（确认不再需要磁盘索引时才加 `--purge`，该选项会删除 `.apsgraph/` 缓存目录）。
+`invalid workspace registry` 报错说明 `~/.apsgraph/registry.json` 损坏或结构非法：修正或删除该文件后重新 `scan` 各 workspace 即可重建，不影响任何已构建索引。workbench 选择器中标注"（失效）"的条目表示其索引文件已不存在，对该 workspace 重新 `scan` 即可恢复；条目不会自动剔除。确认不再需要的条目用 `apsgraph workspace remove --workspace <id|名称|路径>` 移除（同名目录用短 id 精确指定）（确认不再需要磁盘索引时才加 `--purge`，该选项会删除 `.apsgraph/` 缓存目录）。
 
 ### 6.6 workspace sync/vacuum 报 database is locked
 

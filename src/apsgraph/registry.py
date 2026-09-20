@@ -14,6 +14,7 @@ CI isolation).
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import tempfile
@@ -29,6 +30,19 @@ REGISTRY_VERSION = 1
 # concurrent scan may upsert.  Cross-process writers settle last-writer-wins
 # on whole-file replace, which only ever loses a timestamp refresh.
 _LOCK = threading.Lock()
+
+
+def entry_id(workspace_path: str | Path) -> str:
+    """Stable short id of a workspace: first 8 hex chars of the sha1 of the
+    resolved path.  Deterministic — the same path always maps to the same id,
+    so rebuilt registries keep ids stable and pre-id entries need no
+    migration (readers fall back to computing it on the fly)."""
+    return hashlib.sha1(str(Path(workspace_path).resolve()).encode("utf-8")).hexdigest()[:8]
+
+
+def _id_of(entry: Dict[str, Any]) -> str:
+    """Entry id as stored, computed on the fly for entries that predate ids."""
+    return str(entry.get("id") or entry_id(entry["workspacePath"]))
 
 
 def registry_dir() -> Path:
@@ -124,9 +138,11 @@ def upsert_workspace(workspace: Path | str, db_path: Path | str,
         payload = load_registry(path)
         entry = _entry_for(payload, workspace)
         if entry is None:
-            entry = {"name": name or workspace.name, "workspacePath": str(workspace),
+            entry = {"id": entry_id(workspace), "name": name or workspace.name,
+                     "workspacePath": str(workspace),
                      "dbPath": "", "lastScanAt": None, "lastUsedAt": None}
             payload["workspaces"].append(entry)
+        entry.setdefault("id", entry_id(workspace))
         if name:
             entry["name"] = name
         entry["dbPath"] = str(db_path)
@@ -155,6 +171,7 @@ def workspace_overview(path: Optional[Path] = None) -> List[Dict[str, Any]]:
     payload = load_registry(path)
     entries: List[Dict[str, Any]] = [dict(item) for item in payload["workspaces"]]
     for entry in entries:
+        entry.setdefault("id", entry_id(entry["workspacePath"]))
         entry["available"] = Path(entry["dbPath"]).is_file()
     entries.sort(key=lambda item: item["name"])
     entries.sort(key=lambda item: item.get("lastUsedAt") or "", reverse=True)
@@ -168,14 +185,23 @@ def _ref_from_entry(entry: Dict[str, Any]) -> WorkspaceRef:
 
 
 def _match_entry(payload: Dict[str, Any], token: str) -> Optional[Dict[str, Any]]:
-    """Registry-only match for a name|path token: exact name first (ambiguous
-    names fail with the candidate list), then the resolved workspace path.
-    No loose rule here — opening an unregistered index is a workbench-only
-    behavior; registry writes must never touch unregistered entries."""
+    """Registry-only match for a token: entry id first (deterministic and
+    unique even when names repeat), then exact name (ambiguous names fail
+    with the candidate list), then the resolved workspace path.  No loose
+    rule here — opening an unregistered index is a workbench-only behavior;
+    registry writes must never touch unregistered entries."""
     text = str(token)
+    by_id = [item for item in payload["workspaces"] if _id_of(item) == text]
+    if len(by_id) > 1:
+        listing = "\n".join(f"  - {_id_of(item)}  {item['name']}: {item['workspacePath']}"
+                            for item in by_id)
+        raise ValueError(f"ambiguous workspace id: {text}; matching entries:\n{listing}")
+    if by_id:
+        return by_id[0]
     named = [item for item in payload["workspaces"] if item["name"] == text]
     if len(named) > 1:
-        listing = "\n".join(f"  - {item['name']}: {item['workspacePath']}" for item in named)
+        listing = "\n".join(f"  - {_id_of(item)}  {item['name']}: {item['workspacePath']}"
+                            for item in named)
         raise ValueError(f"ambiguous workspace name: {text}; matching entries:\n{listing}")
     if named:
         return named[0]
@@ -184,6 +210,15 @@ def _match_entry(payload: Dict[str, Any], token: str) -> Optional[Dict[str, Any]
         if Path(item["workspacePath"]) == resolved:
             return item
     return None
+
+
+def registered_names(entries: List[Dict[str, Any]]) -> str:
+    """Compact listing for error messages: name(id) pairs, or （无）."""
+    return ", ".join(f"{item['name']}({_id_of(item)})" for item in entries) or "（无）"
+
+
+def registered_entries(path: Optional[Path] = None) -> List[Dict[str, Any]]:
+    return load_registry(path)["workspaces"]
 
 
 def resolve_workspace(token: str, path: Optional[Path] = None) -> WorkspaceRef:
@@ -204,8 +239,8 @@ def resolve_workspace(token: str, path: Optional[Path] = None) -> WorkspaceRef:
     loose_db = resolved / ".apsgraph" / "apsgraph.db"
     if resolved.is_dir() and loose_db.is_file():
         return WorkspaceRef(db_path=loose_db, source_root=resolved)
-    names = ", ".join(item["name"] for item in payload["workspaces"]) or "（无）"
-    raise ValueError(f"unknown workspace: {text}; registered workspaces: {names}")
+    raise ValueError(f"unknown workspace: {text}; registered workspaces: "
+                     f"{registered_names(payload['workspaces'])}")
 
 
 def find_entry(token: str, path: Optional[Path] = None) -> Optional[Dict[str, Any]]:
@@ -226,11 +261,13 @@ def remove_entry(token: str, path: Optional[Path] = None) -> Dict[str, Any]:
         payload = load_registry(path)
         entry = _match_entry(payload, text)
         if entry is None:
-            names = ", ".join(item["name"] for item in payload["workspaces"]) or "（无）"
-            raise ValueError(f"unknown workspace: {text}; registered workspaces: {names}")
+            raise ValueError(f"unknown workspace: {text}; registered workspaces: "
+                             f"{registered_names(payload['workspaces'])}")
         payload["workspaces"].remove(entry)
         save_registry(payload, path)
-        return dict(entry)
+        removed = dict(entry)
+        removed.setdefault("id", entry_id(entry["workspacePath"]))
+        return removed
 
 
 def default_selection(cwd: Optional[Path] = None, path: Optional[Path] = None) -> WorkspaceRef:

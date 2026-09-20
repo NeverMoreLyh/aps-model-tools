@@ -1,6 +1,6 @@
 # APSGraph 设计文档
 
-> 版本：0.41.0
+> 版本：0.42.0
 > 更新时间：2026-09-20  
 > 文档定位：说明 APSGraph 的关键架构、模块设计、数据模型、算法、并发模型、性能设计和安全边界。
 
@@ -66,10 +66,10 @@
 
 全局 workspace 注册表（`~/.apsgraph/registry.json`，`APSGRAPH_HOME` 可重定向目录；与实例注册表 `workbench-registry.json` 独立）：
 
-- 文件结构 `{"version": 1, "workspaces": [...]}`，条目字段 `name`（显示名，默认目录 basename，允许重名）、`workspacePath`（唯一键，resolve 后的绝对路径）、`dbPath`、`lastScanAt`、`lastUsedAt`（`%Y-%m-%d %H:%M:%S` 本地时间）。
+- 文件结构 `{"version": 1, "workspaces": [...]}`，条目字段 `id`（`entry_id`：解析路径的 SHA-1 前 8 位十六进制，确定性短 id，写入时落盘、读取时对旧条目即时计算兜底）、`name`（显示名，默认目录 basename，允许重名）、`workspacePath`（唯一键，resolve 后的绝对路径）、`dbPath`、`lastScanAt`、`lastUsedAt`（`%Y-%m-%d %H:%M:%S` 本地时间）。
 - 写路径：`scan` 成功后 `upsert_workspace`（按 resolved workspacePath upsert，重复扫描刷新而非新增）；workbench 服务已注册 workspace 时 `touch_workspace` 刷新 `lastUsedAt`。写采用临时文件 + `os.replace` 原子替换；进程内并发（workbench 多线程 touch 与 scan upsert）由模块级锁保护，跨进程按最后写者胜（最坏只丢一次时间戳刷新）。
 - 读路径：`load_registry` 对缺失文件返回空注册表，对损坏/结构非法文件 fail-closed 抛错，绝不静默重建；`workspace_overview` 输出带 `available`（索引文件存在性）标注、按最近使用排序的列表。
-- 解析路径：`resolve_workspace(token)` 依次按注册名精确匹配（重名命中多个时报错列候选）、解析后路径匹配、宽松规则（真实目录且 `<dir>/.apsgraph/apsgraph.db` 存在则只读直开、不注册）；`default_selection(cwd)` 实现裸跑默认选中（已注册 cwd → 未注册 cwd 索引 → 上次使用 → 最近扫描，全无时 fail-closed）。
+- 解析路径：`_match_entry(token)` 的注册表内匹配顺序为 id → name（重名命中多个时报错列带 id 候选）→ 解析后路径；`resolve_workspace(token)` 在此之上追加宽松规则（真实目录且 `<dir>/.apsgraph/apsgraph.db` 存在则只读直开、不注册）；`default_selection(cwd)` 实现裸跑默认选中（已注册 cwd → 未注册 cwd 索引 → 上次使用 → 最近扫描，全无时 fail-closed）。
 
 ### 3.3 `apsgraph.store`
 
@@ -83,6 +83,7 @@
 `apsgraph workspace` 维护命令族的实现层：目标解析、批处理框架与各动作。
 
 - 目标解析 `select_targets`：`--all` 展开全部注册条目（空注册表报错）；`--workspace` 走注册表内精确匹配（复用 `registry._match_entry`：name 精确、重名报错列候选、路径精确），**不适用** workbench 的未注册目录宽松直开——注册表写路径绝不触碰未注册条目。
+- 输出层：workspace 族默认输出人类可读表格（`_render_table` 以 `unicodedata.east_asian_width` 做全角字符终端列宽对齐，错误信息在 NOTE 列截断），`--json` 输出机器可读载荷；逐条结果带 `id` 字段。
 - 批处理框架 `_run_batch`：逐 workspace 执行动作函数，单点失败（ValueError/OSError/sqlite3.Error，如索引损坏、database is locked）记录为 `state: "error"` 后继续；报告型结果（`missing`/`stale`/`fresh`/`ok`）是正常输出不算失败。CLI 层按 `ok` 标志决定退出码（任一 error → 2）。
 - 各动作均为既有原语的薄包装：`status` 复用 `workspace_status`（change-set 判定 stale）；`sync` 复用 `sync_workspace`；`rebuild` 复用 `scan_workspace`（staging + 原子替换）并在成功后 `upsert_workspace` 刷新注册条目；`check` 经 `store.connect` 只读打开（继承 APS 索引身份与 schema 版本校验）后执行 `PRAGMA integrity_check`；`vacuum` 先校验索引身份再对原文件执行 VACUUM（autocommit 连接；SQLite 事务性保证中断安全，被占用时按失败记录跳过）。`remove` 是注册表操作（`registry.remove_entry`），`--purge` 在删除条目前先 `shutil.rmtree` 该 workspace 的 `.apsgraph/` 缓存目录（先破坏性操作后注册表变更，失败无半成品状态）。
 

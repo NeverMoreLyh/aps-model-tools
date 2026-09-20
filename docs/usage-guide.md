@@ -1,6 +1,6 @@
 # APSGraph 使用说明
 
-> 版本：0.41.0
+> 版本：0.42.0
 > 更新时间：2026-09-20
 > 项目地址：https://github.com/NeverMoreLyh/aps-model-tools
 
@@ -336,7 +336,20 @@ apsgraph xlsx-export --output-dir docs-xlsx --projects ap-parent
 
 ### 5.16 workspace — 注册 workspace 的条目管理与索引维护
 
-基于全局注册表（`~/.apsgraph/registry.json`）的一组维护命令。除 `list` 外，目标必须显式指定：单目标 `--workspace <名称|路径>`，或 `--all` 批量。批量动作 fail-soft：单个 workspace 失败不影响其余，结果逐项汇总输出；任一失败时退出码为 2。
+基于全局注册表（`~/.apsgraph/registry.json`）的一组维护命令。除 `list` 外，目标必须显式指定：单目标 `--workspace <id|名称|路径>`（每个注册条目有 8 位确定性短 id，同名目录用 id 区分；重名时按名称引用会报错并列出带 id 的候选），或 `--all` 批量。批量动作 fail-soft：单个 workspace 失败不影响其余，结果逐项汇总输出；任一失败时退出码为 2。
+
+本命令族默认输出人类可读的对齐表格（`remove` 为单行确认，stderr 附汇总行）；需要机器可读输出（脚本、AI 代理）时加 `--json`：
+
+```text
+$ apsgraph workspace status --all
+ID        NAME         STATE  ADD  MOD  DEL  NOTE
+3fa2b1c0  edsp-tsp     fresh  —    —    —
+91c07d4e  ap-demo      stale  0    2    1
+```
+
+```bash
+apsgraph workspace list --json        # 机器可读 JSON（CI / AI 代理）
+```
 
 ```bash
 apsgraph workspace list                       # 全部注册条目总览（含索引可用性）
@@ -350,6 +363,7 @@ apsgraph workspace remove --workspace repo-a  # 从注册表移除条目（索�
 
 - `workspace status` 是决定要不要同步的总览：`fresh`（与源码一致）、`stale`（源码有增/改/删，附数量）、`missing`（索引或源码目录缺失）。
 - `workspace sync` / `rebuild` 分别是 `sync` / `scan` 的批量入口，语义完全一致（增量同步、staging + 原子替换）；`rebuild` 成功后同步刷新注册表条目。
+- 默认人类可读输出，加 `--json` 切换为机器可读 JSON（供脚本与 AI 代理消费）。
 - `workspace check` 报告 `ok`（通过 integrity_check 与 schema 版本校验）、`missing` 或 `corrupt`；报告损坏后用 `workspace rebuild` 修复。
 - `workspace vacuum` 直接对索引文件执行 VACUUM（SQLite 事务性保证中断安全）；索引正被 workbench 服务时会因占用而失败跳过，先 `workbench close` 再执行。
 - `workspace remove` 默认只删注册表条目；`--purge` 会**先删除该 workspace 的 `.apsgraph/` 缓存目录**（含索引文件），这是删除磁盘数据的操作，请确认后再使用。重新 `scan` 会恢复注册。
@@ -487,7 +501,7 @@ apsgraph workbench --port 8321 --no-browser # 需要固定端口时显式指定
 
 - 侧栏顶部提供 workspace 下拉选择器，展示名称与最后扫描时间；切换后页面数据（总览统计、查询结果、详情）整体切换。点开下拉时会重新读取注册表——workbench 开着时新 `scan` 的仓库无需重启即可切换。
 - 裸跑时默认选中：当前目录是已注册 workspace → 选中它；否则当前目录有 `.apsgraph/apsgraph.db` → 选中当前目录；否则选中上次使用的 workspace；注册表为空且当前目录无索引时报错提示先 `scan`。
-- `--workspace <名称|路径>` 启动直达某个注册 workspace；指向一个真实存在且有索引的未注册目录时按只读方式直接打开（不自动注册）。
+- `--workspace <id|名称|路径>` 启动直达某个注册 workspace（同名目录用 8 位短 id 区分，重名按名称引用会报错并列出带 id 的候选）；指向一个真实存在且有索引的未注册目录时按只读方式直接打开（不自动注册）。
 - 已删除/移动的 workspace 在选择器中灰显标注"（失效）"，选中时报错提示重新 `scan`；重新 `scan` 会自动恢复注册。
 - 查看某个 workspace 会刷新其在注册表中的"最后使用"时间；除该时间戳外服务无任何写操作。
 - 显式 `--db` 保持单索引模式，不读 workspace 注册表；随机端口与实例注册行为与单索引模式一致。

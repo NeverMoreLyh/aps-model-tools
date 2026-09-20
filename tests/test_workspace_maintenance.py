@@ -35,9 +35,11 @@ class WorkspaceMaintenanceTest(unittest.TestCase):
             self.workspaces[name] = root
 
     def _run(self, argv):
+        """Run a workspace command; JSON output is requested explicitly so
+        the default human-readable tables stay covered by dedicated tests."""
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
-            rc = main(argv)
+            rc = main([*argv, "--json"])
         return rc, json.loads(output.getvalue()) if output.getvalue().strip() else None
 
     def _modify_model(self, name, table):
@@ -214,6 +216,77 @@ class WorkspaceMaintenanceTest(unittest.TestCase):
             main(["workspace", "sync"])
         with self.assertRaises(SystemExit):
             main(["workspace", "sync", "--workspace", "alpha", "--all"])
+
+    def test_ids_are_deterministic_and_listed(self):
+        from apsgraph.registry import entry_id
+
+        rc, payload = self._run(["workspace", "list"])
+        by_name = {item["name"]: item for item in payload["workspaces"]}
+        self.assertEqual(entry_id(self.workspaces["alpha"]), by_name["alpha"]["id"])
+        # 确定性：同一路径重复 upsert 得到同一 id
+        upsert_workspace(self.workspaces["alpha"], self.workspaces["alpha"] / "index.db",
+                         path=self.registry)
+        self.assertEqual(by_name["alpha"]["id"], entry_id(self.workspaces["alpha"]))
+
+    def test_workspace_token_accepts_id(self):
+        from apsgraph.registry import entry_id
+
+        alpha_id = entry_id(self.workspaces["alpha"])
+        rc, payload = self._run(["workspace", "status", "--workspace", alpha_id])
+        self.assertEqual(0, rc)
+        self.assertEqual(["alpha"], [item["name"] for item in payload["results"]])
+
+    def test_ambiguous_name_error_lists_ids_and_id_resolves(self):
+        from apsgraph.registry import entry_id, upsert_workspace
+
+        upsert_workspace(Path(self.tmp.name) / "gamma", Path(self.tmp.name) / "gamma" / "x.db",
+                         name="alpha", path=self.registry)
+        rc, payload = self._run(["workspace", "remove", "--workspace", "alpha"])
+        self.assertEqual(2, rc)
+        self.assertIn("ambiguous workspace name: alpha", payload["error"])
+        self.assertIn(entry_id(self.workspaces["alpha"]), payload["error"])
+
+        # 同名冲突下用 id 仍可精确删除
+        rc, payload = self._run(["workspace", "remove", "--workspace",
+                                 entry_id(self.workspaces["alpha"])])
+        self.assertEqual(0, rc)
+        self.assertEqual("alpha", payload["removed"]["name"])
+
+    def test_default_output_is_human_table_and_json_is_opt_in(self):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            rc = main(["workspace", "list"])
+        text = output.getvalue()
+        self.assertEqual(0, rc)
+        self.assertIn("ID", text)
+        self.assertIn("NAME", text)
+        self.assertIn("alpha", text)
+        self.assertNotIn('"workspaces"', text)  # 默认不是 JSON
+
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            rc = main(["workspace", "list", "--json"])
+        self.assertEqual(0, rc)
+        self.assertIn('"workspaces"', output.getvalue())
+
+        # 批量命令的默认输出是表格 + stderr 汇总；--json 输出 results 数组
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            rc = main(["workspace", "status", "--all"])
+        self.assertIn("STATE", output.getvalue())
+        self.assertIn("fresh", output.getvalue())
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            rc = main(["workspace", "status", "--all", "--json"])
+        payload = json.loads(output.getvalue())
+        self.assertEqual({"alpha", "beta"}, {item["name"] for item in payload["results"]})
+
+        # remove 默认单行确认
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            rc = main(["workspace", "remove", "--workspace", "alpha"])
+        self.assertIn("removed alpha", output.getvalue())
+        self.assertIn("id", output.getvalue())
 
 
 if __name__ == "__main__":

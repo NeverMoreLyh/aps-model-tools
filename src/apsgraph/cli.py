@@ -6,6 +6,7 @@ import re
 import shutil
 import sys
 import time
+import unicodedata
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -18,7 +19,7 @@ from .ddlgen import DdlGenConfig, generate_all_ddl
 from .docx import DocExportReport, export_document
 from .impact import build_impact_report
 from .mcp_server import serve_stdio
-from .registry import find_entry, remove_entry, upsert_workspace, workspace_overview
+from .registry import find_entry, registered_names, remove_entry, upsert_workspace, workspace_overview
 from .scanner import (
     scan_workspace,
     scan_workspace_with_external_indexes,
@@ -327,38 +328,50 @@ def build_parser() -> argparse.ArgumentParser:
         "workspace",
         help="maintenance commands over the global workspace registry (~/.apsgraph/registry.json)")
     ws_subs = ws_cmd.add_subparsers(dest="ws_command", required=True)
-    ws_subs.add_parser(
+
+    def _add_json_flag(parser: argparse.ArgumentParser) -> None:
+        parser.add_argument("--json", action="store_true",
+                            help="emit machine-readable JSON instead of a human-readable table")
+
+    ws_list = ws_subs.add_parser(
         "list", help="list registered workspaces with availability and timestamps")
+    _add_json_flag(ws_list)
 
     ws_remove = ws_subs.add_parser(
         "remove", help="remove a workspace entry from the registry (indexes stay untouched)")
     ws_remove.add_argument("--workspace", required=True, metavar="NAME|PATH",
-                           help="registered workspace name or path")
+                           help="registered workspace id, name, or path")
     ws_remove.add_argument("--purge", action="store_true",
                            help="also delete the workspace's .apsgraph/ cache directory")
+    _add_json_flag(ws_remove)
 
     def _add_ws_target(parser: argparse.ArgumentParser, action: str) -> None:
         group = parser.add_mutually_exclusive_group(required=True)
-        group.add_argument("--workspace", metavar="NAME|PATH",
-                           help=f"single registered workspace to {action}")
+        group.add_argument("--workspace", metavar="ID|NAME|PATH",
+                           help=f"single registered workspace to {action} (id, name, or path)")
         group.add_argument("--all", action="store_true",
                            help=f"{action} every registered workspace")
 
     ws_status = ws_subs.add_parser(
         "status", help="per-workspace index freshness: missing / stale / fresh")
     _add_ws_target(ws_status, "report")
+    _add_json_flag(ws_status)
     ws_sync = ws_subs.add_parser("sync", help="incremental sync of registered workspace indexes")
     _add_ws_target(ws_sync, "sync")
     ws_sync.add_argument("--fail-on-parse-error", action="store_true")
+    _add_json_flag(ws_sync)
     ws_check = ws_subs.add_parser(
         "check", help="index health: APS schema version and SQLite integrity_check")
     _add_ws_target(ws_check, "check")
+    _add_json_flag(ws_check)
     ws_rebuild = ws_subs.add_parser(
         "rebuild", help="full rebuild of registered workspace indexes (staging + atomic replace)")
     _add_ws_target(ws_rebuild, "rebuild")
     ws_rebuild.add_argument("--fail-on-parse-error", action="store_true")
+    _add_json_flag(ws_rebuild)
     ws_vacuum = ws_subs.add_parser("vacuum", help="in-place VACUUM of registered workspace indexes")
     _add_ws_target(ws_vacuum, "vacuum")
+    _add_json_flag(ws_vacuum)
     return parser
 
 
@@ -416,6 +429,83 @@ def _parse_codegraph_databases(values: List[str]) -> Dict[str, Path]:
     return result
 
 
+def _registered_listing() -> str:
+    return registered_names(workspace_overview())
+
+
+def _display_width(text: str) -> int:
+    """Terminal cell width; CJK fullwidth characters count as two cells so
+    tables with Chinese text still align."""
+    return sum(2 if unicodedata.east_asian_width(char) in "FW" else 1
+               for char in text)
+
+
+def _pad(text: str, width: int) -> str:
+    return str(text) + " " * max(0, width - _display_width(str(text)))
+
+
+def _truncate(text: str, limit: int) -> str:
+    flat = " ".join(str(text).split())
+    return flat if _display_width(flat) <= limit else flat[:limit - 1] + "…"
+
+
+def _render_table(headers: List[str], rows: List[List[Any]]) -> str:
+    """Aligned plain-text table using only the standard library."""
+    widths = [_display_width(header) for header in headers]
+    for row in rows:
+        for index, cell in enumerate(row):
+            widths[index] = max(widths[index], _display_width(str(cell)))
+    def fmt(row: List[Any]) -> str:
+        return "  ".join(_pad(cell, widths[index])
+                         for index, cell in enumerate(row)).rstrip()
+    lines = [fmt(headers), "  ".join("-" * width for width in widths)]
+    lines.extend(fmt(row) for row in rows)
+    return "\n".join(lines)
+
+
+_WS_BATCH_COLUMNS = {
+    "status": ["ID", "NAME", "STATE", "ADD", "MOD", "DEL", "NOTE"],
+    "sync": ["ID", "NAME", "STATE", "ADD", "MOD", "DEL", "NODES", "EDGES", "NOTE"],
+    "check": ["ID", "NAME", "STATE", "SCHEMA", "INTEGRITY", "NOTE"],
+    "rebuild": ["ID", "NAME", "STATE", "NODES", "EDGES", "NOTE"],
+    "vacuum": ["ID", "NAME", "STATE", "SIZE BEFORE", "SIZE AFTER", "NOTE"],
+}
+_NOTE_LIMIT = 70
+
+
+def _ws_row(action: str, item: Dict[str, Any]) -> List[Any]:
+    """Human cells for one result row; empty values render as —, the NOTE
+    column carries missing details and truncated error messages."""
+    note = item.get("detail") or item.get("error") or ""
+    state = item.get("state", "?")
+    if action == "status":
+        return [item["id"], item["name"], state,
+                item.get("added", "—"), item.get("modified", "—"),
+                item.get("deleted", "—"), _truncate(note, _NOTE_LIMIT)]
+    if action in ("sync", "rebuild"):
+        base = [item["id"], item["name"], state, item.get("added", "—"),
+                item.get("modified", "—"), item.get("deleted", "—")]
+        if action == "rebuild":
+            base = [item["id"], item["name"], state,
+                    item.get("nodes", "—"), item.get("edges", "—")]
+        else:
+            base += [item.get("nodes", "—"), item.get("edges", "—")]
+        return base + [_truncate(note, _NOTE_LIMIT)]
+    if action == "check":
+        return [item["id"], item["name"], state, item.get("schema_version", "—"),
+                item.get("integrity", "—"), _truncate(note, _NOTE_LIMIT)]
+    if action == "vacuum":
+        return [item["id"], item["name"], state, item.get("size_before", "—"),
+                item.get("size_after", "—"), _truncate(note, _NOTE_LIMIT)]
+    return [item["id"], item["name"], state, _truncate(note, _NOTE_LIMIT)]
+
+
+def _render_workspace_results(action: str, results: List[Dict[str, Any]]) -> str:
+    headers = _WS_BATCH_COLUMNS[action]
+    rows = [_ws_row(action, item) for item in results]
+    return _render_table(headers, rows)
+
+
 def _run_workspace_command(args: argparse.Namespace) -> int:
     """Dispatch the `apsgraph workspace` maintenance family.
 
@@ -425,13 +515,23 @@ def _run_workspace_command(args: argparse.Namespace) -> int:
     are recorded in the JSON payload and only mark the exit code.
     """
     if args.ws_command == "list":
-        _json({"workspaces": workspace_overview()})
+        payload = {"workspaces": workspace_overview()}
+        if args.json:
+            _json(payload)
+        else:
+            rows = [[item["id"], item["name"],
+                     "ok" if item["available"] else "MISSING",
+                     item.get("lastScanAt") or "—", item.get("lastUsedAt") or "—",
+                     item["workspacePath"]]
+                    for item in payload["workspaces"]]
+            print(_render_table(
+                ["ID", "NAME", "STATE", "LAST SCAN", "LAST USED", "PATH"], rows))
         return 0
     if args.ws_command == "remove":
         entry = find_entry(args.workspace)
         if entry is None:
-            names = ", ".join(item["name"] for item in workspace_overview()) or "（无）"
-            raise ValueError(f"unknown workspace: {args.workspace}; registered workspaces: {names}")
+            raise ValueError(f"unknown workspace: {args.workspace}; "
+                             f"registered workspaces: {_registered_listing()}")
         purged = False
         if args.purge:
             cache = Path(entry["workspacePath"]) / ".apsgraph"
@@ -439,7 +539,14 @@ def _run_workspace_command(args: argparse.Namespace) -> int:
                 shutil.rmtree(cache)
                 purged = True
         removed = remove_entry(args.workspace)
-        _json({"removed": removed, "purged": purged})
+        payload = {"removed": removed, "purged": purged}
+        if args.json:
+            _json(payload)
+        else:
+            line = f"removed {removed['name']} (id {removed['id']})"
+            if purged:
+                line += "; .apsgraph/ cache directory purged"
+            print(line)
         return 0
 
     entries = select_targets(args.workspace, args.all)
@@ -457,7 +564,15 @@ def _run_workspace_command(args: argparse.Namespace) -> int:
         results, ok = vacuum_workspaces(entries)
     else:  # pragma: no cover - argparse enforces the choice
         raise ValueError(f"unknown workspace command: {args.ws_command}")
-    _json({"results": results, "ok": ok})
+    payload = {"results": results, "ok": ok}
+    if args.json:
+        _json(payload)
+    else:
+        print(_render_workspace_results(args.ws_command, results))
+        failures = sum(1 for item in results if item.get("state") == "error")
+        summary = f"[apsgraph] {len(results)} 个 workspace，{failures} 个失败" if failures \
+            else f"[apsgraph] {len(results)} 个 workspace 全部成功"
+        print(summary)
     return 0 if ok else 2
 
 

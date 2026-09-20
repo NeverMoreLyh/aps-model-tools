@@ -1,6 +1,6 @@
 # APSGraph 使用说明
 
-> 版本：0.40.0
+> 版本：0.41.0
 > 更新时间：2026-09-20
 > 项目地址：https://github.com/NeverMoreLyh/aps-model-tools
 
@@ -97,6 +97,7 @@ apsgraph --help
 | `xlsx-export` | 导出 Excel 模型文档 |
 | `serve-mcp` | 以 stdio MCP 服务暴露元数据工具 |
 | `workbench` | 启动本地浏览器查询工作台（只读，127.0.0.1，多 workspace 可切换，默认随机空闲端口） |
+| `workspace list/remove/status/sync/check/rebuild/vacuum` | 注册 workspace 的条目管理与索引批量维护 |
 | `workbench list` | 列出正在运行的 workbench 实例（端口、PID、工作区、索引） |
 | `workbench close` | 按端口或全部停止运行中的 workbench 实例 |
 
@@ -332,6 +333,26 @@ apsgraph xlsx-export --output-dir docs-xlsx --projects ap-parent
 ```
 
 可选类型包括 `table`、`table_list`、`dict`、`dict_ref`、`enum`、`trans`、`nsql`、`service`、`service_v2`、`params`、`error_code`、`batch_tran`。
+
+### 5.16 workspace — 注册 workspace 的条目管理与索引维护
+
+基于全局注册表（`~/.apsgraph/registry.json`）的一组维护命令。除 `list` 外，目标必须显式指定：单目标 `--workspace <名称|路径>`，或 `--all` 批量。批量动作 fail-soft：单个 workspace 失败不影响其余，结果逐项汇总输出；任一失败时退出码为 2。
+
+```bash
+apsgraph workspace list                       # 全部注册条目总览（含索引可用性）
+apsgraph workspace status --all               # 各索引新鲜度：fresh / stale / missing
+apsgraph workspace sync --all                 # 批量增量同步所有过期索引
+apsgraph workspace check --all                # 索引健康：schema 版本 + integrity_check
+apsgraph workspace rebuild --workspace repo-a # 全量重建单个 workspace
+apsgraph workspace vacuum --all               # 压缩全部索引
+apsgraph workspace remove --workspace repo-a  # 从注册表移除条目（索引保留）
+```
+
+- `workspace status` 是决定要不要同步的总览：`fresh`（与源码一致）、`stale`（源码有增/改/删，附数量）、`missing`（索引或源码目录缺失）。
+- `workspace sync` / `rebuild` 分别是 `sync` / `scan` 的批量入口，语义完全一致（增量同步、staging + 原子替换）；`rebuild` 成功后同步刷新注册表条目。
+- `workspace check` 报告 `ok`（通过 integrity_check 与 schema 版本校验）、`missing` 或 `corrupt`；报告损坏后用 `workspace rebuild` 修复。
+- `workspace vacuum` 直接对索引文件执行 VACUUM（SQLite 事务性保证中断安全）；索引正被 workbench 服务时会因占用而失败跳过，先 `workbench close` 再执行。
+- `workspace remove` 默认只删注册表条目；`--purge` 会**先删除该 workspace 的 `.apsgraph/` 缓存目录**（含索引文件），这是删除磁盘数据的操作，请确认后再使用。重新 `scan` 会恢复注册。
 
 ## 6. 典型工作流
 

@@ -917,12 +917,17 @@ class WorkbenchMultiWorkspaceHttpTest(unittest.TestCase):
         self.assertEqual({"mode": "single"}, payload)
 
     def test_serve_workbench_multi_fails_closed_without_registry_or_cwd_index(self):
-        with self.assertRaises(FileNotFoundError):
-            serve_workbench(db_path=None, open_browser=False)
+        # 隔离机器状态：真实 ~/.apsgraph 可能已有可用条目，必须指向空注册表
+        empty_home = self.tmp / "empty-home"
+        with mock.patch.dict(os.environ, {"APSGRAPH_HOME": str(empty_home)}):
+            with self.assertRaises(FileNotFoundError):
+                serve_workbench(db_path=None, open_browser=False)
 
     def test_serve_workbench_rejects_unknown_workspace_token(self):
-        with self.assertRaises(ValueError):
-            serve_workbench(db_path=None, open_browser=False, workspace="nope")
+        empty_home = self.tmp / "empty-home"
+        with mock.patch.dict(os.environ, {"APSGRAPH_HOME": str(empty_home)}):
+            with self.assertRaises(ValueError):
+                serve_workbench(db_path=None, open_browser=False, workspace="nope")
 
 
 if __name__ == "__main__":

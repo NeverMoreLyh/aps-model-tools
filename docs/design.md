@@ -1,6 +1,6 @@
 # APSGraph 设计文档
 
-> 版本：0.40.0
+> 版本：0.41.0
 > 更新时间：2026-09-20  
 > 文档定位：说明 APSGraph 的关键架构、模块设计、数据模型、算法、并发模型、性能设计和安全边界。
 
@@ -77,6 +77,14 @@
 - 只读连接和写连接隔离。
 - 提供模型查询和引用遍历原语。
 - 拒绝非 APS 索引数据库和跨 workspace 索引。
+
+### 3.4 `apsgraph.workspace_maintenance`
+
+`apsgraph workspace` 维护命令族的实现层：目标解析、批处理框架与各动作。
+
+- 目标解析 `select_targets`：`--all` 展开全部注册条目（空注册表报错）；`--workspace` 走注册表内精确匹配（复用 `registry._match_entry`：name 精确、重名报错列候选、路径精确），**不适用** workbench 的未注册目录宽松直开——注册表写路径绝不触碰未注册条目。
+- 批处理框架 `_run_batch`：逐 workspace 执行动作函数，单点失败（ValueError/OSError/sqlite3.Error，如索引损坏、database is locked）记录为 `state: "error"` 后继续；报告型结果（`missing`/`stale`/`fresh`/`ok`）是正常输出不算失败。CLI 层按 `ok` 标志决定退出码（任一 error → 2）。
+- 各动作均为既有原语的薄包装：`status` 复用 `workspace_status`（change-set 判定 stale）；`sync` 复用 `sync_workspace`；`rebuild` 复用 `scan_workspace`（staging + 原子替换）并在成功后 `upsert_workspace` 刷新注册条目；`check` 经 `store.connect` 只读打开（继承 APS 索引身份与 schema 版本校验）后执行 `PRAGMA integrity_check`；`vacuum` 先校验索引身份再对原文件执行 VACUUM（autocommit 连接；SQLite 事务性保证中断安全，被占用时按失败记录跳过）。`remove` 是注册表操作（`registry.remove_entry`），`--purge` 在删除条目前先 `shutil.rmtree` 该 workspace 的 `.apsgraph/` 缓存目录（先破坏性操作后注册表变更，失败无半成品状态）。
 
 ### 3.6 APS 类型解析与数据库列映射
 

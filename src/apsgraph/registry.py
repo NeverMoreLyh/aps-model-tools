@@ -167,6 +167,25 @@ def _ref_from_entry(entry: Dict[str, Any]) -> WorkspaceRef:
                         workspace_path=workspace)
 
 
+def _match_entry(payload: Dict[str, Any], token: str) -> Optional[Dict[str, Any]]:
+    """Registry-only match for a name|path token: exact name first (ambiguous
+    names fail with the candidate list), then the resolved workspace path.
+    No loose rule here — opening an unregistered index is a workbench-only
+    behavior; registry writes must never touch unregistered entries."""
+    text = str(token)
+    named = [item for item in payload["workspaces"] if item["name"] == text]
+    if len(named) > 1:
+        listing = "\n".join(f"  - {item['name']}: {item['workspacePath']}" for item in named)
+        raise ValueError(f"ambiguous workspace name: {text}; matching entries:\n{listing}")
+    if named:
+        return named[0]
+    resolved = Path(text).expanduser().resolve()
+    for item in payload["workspaces"]:
+        if Path(item["workspacePath"]) == resolved:
+            return item
+    return None
+
+
 def resolve_workspace(token: str, path: Optional[Path] = None) -> WorkspaceRef:
     """Resolve a workbench ``ws``/``--workspace`` token.
 
@@ -178,21 +197,40 @@ def resolve_workspace(token: str, path: Optional[Path] = None) -> WorkspaceRef:
     """
     text = str(token)
     payload = load_registry(path)
-    named = [item for item in payload["workspaces"] if item["name"] == text]
-    if len(named) > 1:
-        listing = "\n".join(f"  - {item['name']}: {item['workspacePath']}" for item in named)
-        raise ValueError(f"ambiguous workspace name: {text}; matching entries:\n{listing}")
-    if named:
-        return _ref_from_entry(named[0])
+    entry = _match_entry(payload, text)
+    if entry is not None:
+        return _ref_from_entry(entry)
     resolved = Path(text).expanduser().resolve()
-    for item in payload["workspaces"]:
-        if Path(item["workspacePath"]) == resolved:
-            return _ref_from_entry(item)
     loose_db = resolved / ".apsgraph" / "apsgraph.db"
     if resolved.is_dir() and loose_db.is_file():
         return WorkspaceRef(db_path=loose_db, source_root=resolved)
     names = ", ".join(item["name"] for item in payload["workspaces"]) or "（无）"
     raise ValueError(f"unknown workspace: {text}; registered workspaces: {names}")
+
+
+def find_entry(token: str, path: Optional[Path] = None) -> Optional[Dict[str, Any]]:
+    """Registry-only lookup of a name|path token; ``None`` when unregistered.
+    Ambiguous names raise with the candidate list."""
+    return _match_entry(load_registry(path), token)
+
+
+def remove_entry(token: str, path: Optional[Path] = None) -> Dict[str, Any]:
+    """Remove a registry entry matched by name or resolved workspace path.
+
+    Only the entry is removed — index files and sources stay untouched.
+    Unregistered tokens are an error, not a no-op, so a typo cannot silently
+    pass as success.
+    """
+    text = str(token)
+    with _LOCK:
+        payload = load_registry(path)
+        entry = _match_entry(payload, text)
+        if entry is None:
+            names = ", ".join(item["name"] for item in payload["workspaces"]) or "（无）"
+            raise ValueError(f"unknown workspace: {text}; registered workspaces: {names}")
+        payload["workspaces"].remove(entry)
+        save_registry(payload, path)
+        return dict(entry)
 
 
 def default_selection(cwd: Optional[Path] = None, path: Optional[Path] = None) -> WorkspaceRef:

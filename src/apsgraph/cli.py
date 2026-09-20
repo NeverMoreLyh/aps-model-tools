@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import shutil
 import sys
 import time
 from dataclasses import asdict
@@ -17,7 +18,7 @@ from .ddlgen import DdlGenConfig, generate_all_ddl
 from .docx import DocExportReport, export_document
 from .impact import build_impact_report
 from .mcp_server import serve_stdio
-from .registry import upsert_workspace
+from .registry import find_entry, remove_entry, upsert_workspace, workspace_overview
 from .scanner import (
     scan_workspace,
     scan_workspace_with_external_indexes,
@@ -27,6 +28,10 @@ from .scanner import (
 from .search_scope import SearchScope
 from .store import connect, find_nodes, get_stats, references, search_nodes
 from .workbench import close_workbenches, list_workbenches, serve_workbench
+from .workspace_maintenance import (
+    check_workspaces, rebuild_workspaces, select_targets,
+    status_workspaces, sync_workspaces, vacuum_workspaces,
+)
 from .xlsx_export import ExcelExportReport, export_excel
 
 
@@ -317,6 +322,43 @@ def build_parser() -> argparse.ArgumentParser:
                           help="port of the instance to stop")
     wb_close.add_argument("--all", action="store_true", dest="close_all",
                           help="stop every running instance")
+
+    ws_cmd = sub.add_parser(
+        "workspace",
+        help="maintenance commands over the global workspace registry (~/.apsgraph/registry.json)")
+    ws_subs = ws_cmd.add_subparsers(dest="ws_command", required=True)
+    ws_subs.add_parser(
+        "list", help="list registered workspaces with availability and timestamps")
+
+    ws_remove = ws_subs.add_parser(
+        "remove", help="remove a workspace entry from the registry (indexes stay untouched)")
+    ws_remove.add_argument("--workspace", required=True, metavar="NAME|PATH",
+                           help="registered workspace name or path")
+    ws_remove.add_argument("--purge", action="store_true",
+                           help="also delete the workspace's .apsgraph/ cache directory")
+
+    def _add_ws_target(parser: argparse.ArgumentParser, action: str) -> None:
+        group = parser.add_mutually_exclusive_group(required=True)
+        group.add_argument("--workspace", metavar="NAME|PATH",
+                           help=f"single registered workspace to {action}")
+        group.add_argument("--all", action="store_true",
+                           help=f"{action} every registered workspace")
+
+    ws_status = ws_subs.add_parser(
+        "status", help="per-workspace index freshness: missing / stale / fresh")
+    _add_ws_target(ws_status, "report")
+    ws_sync = ws_subs.add_parser("sync", help="incremental sync of registered workspace indexes")
+    _add_ws_target(ws_sync, "sync")
+    ws_sync.add_argument("--fail-on-parse-error", action="store_true")
+    ws_check = ws_subs.add_parser(
+        "check", help="index health: APS schema version and SQLite integrity_check")
+    _add_ws_target(ws_check, "check")
+    ws_rebuild = ws_subs.add_parser(
+        "rebuild", help="full rebuild of registered workspace indexes (staging + atomic replace)")
+    _add_ws_target(ws_rebuild, "rebuild")
+    ws_rebuild.add_argument("--fail-on-parse-error", action="store_true")
+    ws_vacuum = ws_subs.add_parser("vacuum", help="in-place VACUUM of registered workspace indexes")
+    _add_ws_target(ws_vacuum, "vacuum")
     return parser
 
 
@@ -372,6 +414,51 @@ def _parse_codegraph_databases(values: List[str]) -> Dict[str, Path]:
             raise ValueError(f"duplicate CodeGraph repository: {repository}")
         result[repository] = Path(database)
     return result
+
+
+def _run_workspace_command(args: argparse.Namespace) -> int:
+    """Dispatch the `apsgraph workspace` maintenance family.
+
+    `list`/`remove` are registry-level; the batch actions resolve targets
+    through the registry and report fail-soft per-workspace results.  Target
+    resolution errors land in main()'s error handling; per-workspace failures
+    are recorded in the JSON payload and only mark the exit code.
+    """
+    if args.ws_command == "list":
+        _json({"workspaces": workspace_overview()})
+        return 0
+    if args.ws_command == "remove":
+        entry = find_entry(args.workspace)
+        if entry is None:
+            names = ", ".join(item["name"] for item in workspace_overview()) or "（无）"
+            raise ValueError(f"unknown workspace: {args.workspace}; registered workspaces: {names}")
+        purged = False
+        if args.purge:
+            cache = Path(entry["workspacePath"]) / ".apsgraph"
+            if cache.is_dir():
+                shutil.rmtree(cache)
+                purged = True
+        removed = remove_entry(args.workspace)
+        _json({"removed": removed, "purged": purged})
+        return 0
+
+    entries = select_targets(args.workspace, args.all)
+    if args.ws_command == "status":
+        results, ok = status_workspaces(entries)
+    elif args.ws_command == "sync":
+        results, ok = sync_workspaces(entries, args.fail_on_parse_error, _progress_bar)
+        _progress_bar_end()
+    elif args.ws_command == "check":
+        results, ok = check_workspaces(entries)
+    elif args.ws_command == "rebuild":
+        results, ok = rebuild_workspaces(entries, args.fail_on_parse_error, _progress_bar)
+        _progress_bar_end()
+    elif args.ws_command == "vacuum":
+        results, ok = vacuum_workspaces(entries)
+    else:  # pragma: no cover - argparse enforces the choice
+        raise ValueError(f"unknown workspace command: {args.ws_command}")
+    _json({"results": results, "ok": ok})
+    return 0 if ok else 2
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -430,6 +517,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             return serve_workbench(args.db, args.port,
                                    open_browser=not args.no_browser, progress=_progress,
                                    workspace=args.workspace)
+        if args.command == "workspace":
+            return _run_workspace_command(args)
         if args.command == "status":
             _json(asdict(workspace_status(args.workspace, args.db)))
             return 0

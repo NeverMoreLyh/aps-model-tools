@@ -1,6 +1,6 @@
 # APSGraph 运维说明文档
 
-> 版本：0.40.0
+> 版本：0.41.0
 > 更新时间：2026-09-20
 > 文档定位：说明安装发布、索引巡检、故障处理、备份回滚和 CI 使用。
 
@@ -70,22 +70,35 @@ python3 -m twine upload dist/*   # 需要 PyPI 账号与 API Token；发布后�
 
 ## 4. 日常巡检
 
+单仓库巡检：
+
 ```bash
 apsgraph options --workspace /path/to/workspace
 apsgraph status --workspace /path/to/workspace
 apsgraph stats --db /path/to/workspace/.apsgraph/apsgraph.db
 ```
 
-关注解析失败文件、added/modified/deleted 数量、unresolved 数量以及节点和边规模。外部索引可通过 `scan --external-db DB` 复用，workspace 定义优先。
+多仓库巡检（基于全局注册表，一次覆盖所有已注册 workspace）：
+
+```bash
+apsgraph workspace list          # 注册条目与索引可用性总览
+apsgraph workspace status --all  # 逐仓库报告 fresh / stale / missing
+apsgraph workspace check --all   # 索引健康（schema 版本 + integrity_check）
+```
+
+关注 `missing`/`stale` 数量、added/modified/deleted 数量、解析失败文件与 `corrupt` 报告；`check` 报损坏的索引用 `apsgraph workspace rebuild --workspace <token>` 修复。外部索引可通过 `scan --external-db DB` 复用，workspace 定义优先。
 
 ## 5. Workspace 索引
 
 ```bash
 apsgraph scan --workspace /path/to/workspace
 apsgraph sync --workspace /path/to/workspace
+# 多仓库批量（等价于逐仓库执行）：
+apsgraph workspace sync --all
+apsgraph workspace rebuild --all   # scanner 版本升级或索引损坏后的全量重建
 ```
 
-`scan` 只解析受支持的 XML 并重建 SQLite V2 索引；`sync` 按文件路径和 SHA-256 更新已有索引。两者均不修改业务源码。
+`scan` 只解析受支持的 XML 并重建 SQLite V2 索引；`sync` 按文件路径和 SHA-256 更新已有索引。两者均不修改业务源码。低频维护可在服务空闲时执行 `apsgraph workspace vacuum --all` 压缩索引（索引正被 workbench 服务时会因占用失败跳过，先 `workbench close` 再执行）。
 
 ## 6. 常见故障
 
@@ -109,7 +122,11 @@ apsgraph sync --workspace /path/to/workspace
 
 ### 6.5 注册表损坏或 workspace 失效
 
-`invalid workspace registry` 报错说明 `~/.apsgraph/registry.json` 损坏或结构非法：修正或删除该文件后重新 `scan` 各 workspace 即可重建，不影响任何已构建索引。workbench 选择器中标注"（失效）"的条目表示其索引文件已不存在，对该 workspace 重新 `scan` 即可恢复；条目不会自动剔除。
+`invalid workspace registry` 报错说明 `~/.apsgraph/registry.json` 损坏或结构非法：修正或删除该文件后重新 `scan` 各 workspace 即可重建，不影响任何已构建索引。workbench 选择器中标注"（失效）"的条目表示其索引文件已不存在，对该 workspace 重新 `scan` 即可恢复；条目不会自动剔除。确认不再需要的条目用 `apsgraph workspace remove --workspace <token>` 移除（确认不再需要磁盘索引时才加 `--purge`，该选项会删除 `.apsgraph/` 缓存目录）。
+
+### 6.6 workspace sync/vacuum 报 database is locked
+
+批量维护与运行中的 workbench 并发时会按 fail-soft 记录失败并继续其余 workspace。处理：先 `apsgraph workbench list` 找到占用实例，`apsgraph workbench close --port <port>` 停止后重跑失败项（`apsgraph workspace sync --workspace <token>`）。
 
 ## 7. 性能治理
 

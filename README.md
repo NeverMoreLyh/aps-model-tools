@@ -14,7 +14,7 @@ Read-only APS metadata analysis toolkit: scan APS XML models into a compact SQLi
 |---|---|
 | Indexing | Full scan (`scan`) and incremental sync (`sync`) of APS XML models (tables, dictionaries, enums, services, transactions, batches, named SQL, sharding, error codes, constants, base types) into SQLite Schema V2 with semantic nodes, reference edges, and an FTS5 search index (raw XML is never stored; XML fragments are read on demand from source files) |
 | Query & analysis | Exact find, fuzzy search (id/fullId/Chinese name/description), reference graphs (`refs`), reverse impact analysis (`impact`), workspace status and index statistics |
-| DDL | Single-table DDL preview (`ddl`), full MySQL/Oracle/PostgreSQL DDL generation (`ddl-gen`), model-vs-live-database schema diff (`db-diff`, DSN or offline JSON) |
+| DDL | Single-table DDL preview (`ddl`), full MySQL/Oracle/PostgreSQL/TDSQL/GoldenDB DDL generation (`ddl-gen`; distributed dialects support table shard type and RANGE daily partitioning in the workbench dialog), model-vs-live-database schema diff (`db-diff`, DSN or offline JSON) |
 | Documentation | Markdown export (`doc-export`) and project-aggregated Excel export (`xlsx-export`, optional `openpyxl`) |
 | Bridge & audit | Map APS models to generated Java symbols and CodeGraph consumers (`bridge`); heuristic functional-capability classification of models and Java packages (`classify`) |
 | MCP | Expose the metadata graph as stdio MCP tools for AI clients (`serve-mcp`) |
@@ -85,7 +85,7 @@ apsgraph options               # version, defaults, effective workspace rules
 | `refs` | Incoming/outgoing reference graph with depth |
 | `impact` | Reverse dependency impact report |
 | `ddl` | Single-table DDL preview (experimental subset, never executed) |
-| `ddl-gen` | Generate MySQL/Oracle/PostgreSQL DDL for all or selected tables |
+| `ddl-gen` | Generate MySQL/Oracle/PostgreSQL/TDSQL/GoldenDB DDL for all or selected tables |
 | `db-diff` | Compare model schema against a live DB (DSN) or a JSON export |
 | `bridge` | Map models to generated Java and CodeGraph consumers |
 | `classify` | Heuristic capability audit of models and Java packages |

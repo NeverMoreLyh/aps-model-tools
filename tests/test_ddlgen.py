@@ -6,7 +6,7 @@ import unittest
 import zipfile
 from pathlib import Path
 
-from apsgraph.ddlgen import DEFAULT_FACETS, DdlGenConfig, TYPE_BASE, generate_all_ddl
+from apsgraph.ddlgen import DEFAULT_FACETS, DdlGenConfig, LENGTH_TYPES, TYPE_BASE, generate_all_ddl
 from apsgraph.scanner import import_jar_models, scan_workspace
 from apsgraph.store import connect
 
@@ -45,6 +45,30 @@ JAR_FILES = {
     "datatype/KBaseType.u_schema.xml": """<?xml version="1.0"?>
 <schema id="KBaseType" package="framework.datatype">
   <restrictionType id="U_LONG_TEXT" base="string" maxLength="2000"/>
+</schema>
+""",
+}
+
+# 分布式方言与 RANGE 分区的专用表：覆盖 yyyymmdd 字符串、dateTime、timestamp、
+# 整数主键与普通唯一索引（分片键约束告警）
+DIST_FILES = {
+    "tables/Dist.tables.xml": """<?xml version="1.0"?>
+<schema id="DistTables" package="demo.dist">
+  <restrictionType id="U_DATE8" base="dateString" maxLength="8"/>
+  <table id="dist_order" name="dist_order">
+    <fields>
+      <field id="rec_id" type="Base.U_ID" primarykey="true" nullable="false"/>
+      <field id="acct_no" type="Base.U_NAME" primarykey="true" nullable="false"/>
+      <field id="acct_date" type="DistTables.U_DATE8" nullable="false"/>
+      <field id="create_time" type="dateTime" nullable="false"/>
+      <field id="upd_stamp" type="timestamp"/>
+      <field id="amt" type="amount"/>
+    </fields>
+    <indexes>
+      <index id="uq_acct" type="unique" fields="acct_no"/>
+      <index id="idx_date" type="index" fields="acct_date"/>
+    </indexes>
+  </table>
 </schema>
 """,
 }
@@ -167,6 +191,174 @@ class DdlGenTest(unittest.TestCase):
         status = workspace_status(self.root, self.db)
         self.assertTrue(status.up_to_date,
                         "jar-imported files must not appear as workspace deletions/additions")
+
+
+class DistributedDdlTest(unittest.TestCase):
+    """tdsql/goldendb 方言、表分片类型与 RANGE 分区（按日）的回归测试。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        for relative, content in {**WORKSPACE_FILES, **DIST_FILES}.items():
+            path = self.root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content, encoding="utf-8")
+        self.db = self.root / "models.db"
+        scan_workspace(self.root, self.db)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _generate(self, **overrides):
+        cfg_kwargs = {"dialect": "mysql"}
+        cfg_kwargs.update(overrides)
+        conn = connect(self.db, read_only=True)
+        try:
+            return generate_all_ddl(conn, DdlGenConfig(**cfg_kwargs), ["DistTables.dist_order"])
+        finally:
+            conn.close()
+
+    def test_distributed_dialects_share_mysql_type_mappings(self):
+        self.assertIs(TYPE_BASE["tdsql"], TYPE_BASE["mysql"])
+        self.assertIs(TYPE_BASE["goldendb"], TYPE_BASE["mysql"])
+        self.assertIs(DEFAULT_FACETS["tdsql"], DEFAULT_FACETS["mysql"])
+        self.assertIs(LENGTH_TYPES["goldendb"], LENGTH_TYPES["mysql"])
+        for dialect in ("tdsql", "goldendb"):
+            report = self._generate(dialect=dialect)
+            self.assertEqual([], report.errors)
+            self.assertIn("create table `dist_order`", report.sql)
+            self.assertIn("ENGINE=InnoDB DEFAULT CHARSET=utf8mb4", report.sql)
+            self.assertIn("`acct_no` varchar(40)", report.sql)  # 映射与 mysql 一致
+            self.assertIn("alter table `dist_order` add constraint pk_dist_order", report.sql)
+
+    def test_tdsql_distribution_clauses(self):
+        shard = self._generate(dialect="tdsql", shard_type="shard", shard_key="acct_no")
+        self.assertEqual([], shard.errors)
+        self.assertIn(" shardkey=acct_no", shard.sql)
+        broadcast = self._generate(dialect="tdsql", shard_type="broadcast")
+        self.assertIn(" shardkey=noshardkey_allset", broadcast.sql)
+        normal = self._generate(dialect="tdsql", shard_type="normal")
+        self.assertNotIn("shardkey", normal.sql)
+
+    def test_goldendb_distribution_clauses(self):
+        shard = self._generate(dialect="goldendb", shard_type="shard", shard_key="acct_no",
+                               node_groups="g1,g2")
+        self.assertIn(" DISTRIBUTED BY HASH(acct_no) (g1,g2)", shard.sql)
+        # 节点组括号可选：缺省时只输出 HASH(列)
+        bare = self._generate(dialect="goldendb", shard_type="shard", shard_key="acct_no")
+        self.assertIn(" DISTRIBUTED BY HASH(acct_no)", bare.sql)
+        broadcast = self._generate(dialect="goldendb", shard_type="broadcast",
+                                   node_groups="g1,g2,g3,g4")
+        self.assertIn(" DISTRIBUTED BY DUPLICATE(g1,g2,g3,g4)", broadcast.sql)
+        normal = self._generate(dialect="goldendb", shard_type="normal", node_groups="g1,g2")
+        self.assertIn(" DISTRIBUTED BY DUPLICATE(g1)", normal.sql)  # 单节点存储取第一组
+        plain = self._generate(dialect="goldendb", shard_type="normal")
+        self.assertNotIn("DISTRIBUTED BY", plain.sql)
+
+    def test_distribution_config_fail_closed(self):
+        with self.assertRaises(ValueError):
+            self._generate(dialect="mysql", shard_type="shard", shard_key="acct_no")
+        with self.assertRaises(ValueError):
+            self._generate(dialect="tdsql", shard_type="shard")  # 缺分片键
+        with self.assertRaises(ValueError):
+            self._generate(dialect="tdsql", shard_type="grid")
+        with self.assertRaises(ValueError):
+            self._generate(dialect="goldendb", shard_type="broadcast")  # 缺节点组
+        # 分片键列不存在：fail-closed 报错且不产出该表 DDL
+        report = self._generate(dialect="tdsql", shard_type="shard", shard_key="missing_col")
+        self.assertEqual("", report.sql)
+        self.assertTrue(any("shard key column not found" in e for e in report.errors))
+
+    def test_range_partition_daily_definitions(self):
+        # yyyymmdd 字符串列：RANGE COLUMNS 直接比较；分区名=上界-1 天
+        report = self._generate(dialect="mysql", create_partition=True,
+                                partition_key="acct_date", partition_type="range",
+                                partition_start="20260920", partition_end="20260921")
+        self.assertEqual([], report.errors)
+        self.assertIn(
+            "PARTITION BY RANGE COLUMNS (`acct_date`) "
+            "(PARTITION p20260920 VALUES LESS THAN ('20260921'), "
+            "PARTITION p20260921 VALUES LESS THAN ('20260922'))",
+            report.sql)
+        self.assertNotIn("pmax", report.sql)  # 指定终止日期时不追加 MAXVALUE
+        # 分区键自动追加进主键（MySQL 分区表要求）
+        self.assertIn("primary key (`rec_id`, `acct_no`, `acct_date`)", report.sql)
+
+    def test_range_partition_maxvalue_fallback(self):
+        report = self._generate(dialect="tdsql", create_partition=True,
+                                partition_key="acct_date", partition_start="20260920")
+        self.assertIn(
+            "PARTITION p20260920 VALUES LESS THAN ('20260921'), "
+            "PARTITION pmax VALUES LESS THAN (MAXVALUE)",
+            report.sql)
+
+    def test_range_partition_conversion_functions(self):
+        to_days = self._generate(dialect="mysql", create_partition=True,
+                                 partition_key="create_time", partition_start="20260920",
+                                 partition_end="20260920")
+        self.assertIn(
+            "PARTITION BY RANGE (`create_time`) "
+            "(PARTITION p20260920 VALUES LESS THAN (TO_DAYS('20260921')))",
+            to_days.sql)
+        unix = self._generate(dialect="mysql", create_partition=True,
+                              partition_key="upd_stamp", partition_start="20260920")
+        self.assertIn(
+            "PARTITION BY RANGE (`upd_stamp`) "
+            "(PARTITION p20260920 VALUES LESS THAN (UNIX_TIMESTAMP('20260921')), "
+            "PARTITION pmax VALUES LESS THAN (MAXVALUE))",
+            unix.sql)
+        passthrough = self._generate(dialect="mysql", create_partition=True,
+                                     partition_key="rec_id", partition_start="20260920")
+        self.assertIn(
+            "PARTITION BY RANGE (`rec_id`) "
+            "(PARTITION p20260920 VALUES LESS THAN (20260921), "
+            "PARTITION pmax VALUES LESS THAN (MAXVALUE))",
+            passthrough.sql)
+
+    def test_partition_config_fail_closed(self):
+        with self.assertRaises(ValueError):
+            self._generate(dialect="mysql", create_partition=True, partition_key="",
+                           partition_start="20260920")
+        with self.assertRaises(ValueError):
+            self._generate(dialect="mysql", create_partition=True, partition_key="acct_date",
+                           partition_type="list", partition_start="20260920")
+        with self.assertRaises(ValueError):
+            self._generate(dialect="mysql", create_partition=True, partition_key="acct_date",
+                           partition_start="2026-09-20")  # 非 yyyymmdd
+        with self.assertRaises(ValueError):
+            self._generate(dialect="mysql", create_partition=True, partition_key="acct_date",
+                           partition_start="20260231")  # 非法日历日期
+        with self.assertRaises(ValueError):
+            self._generate(dialect="mysql", create_partition=True, partition_key="acct_date",
+                           partition_start="20260920", partition_end="20260901")
+        with self.assertRaises(ValueError):
+            self._generate(dialect="oracle", create_partition=True, partition_key="acct_date",
+                           partition_start="20260920")  # 仅 MySQL 家族支持分区
+        # 分区键列不存在：报错且不产出该表 DDL
+        report = self._generate(dialect="mysql", create_partition=True, partition_key="nope",
+                                partition_start="20260920")
+        self.assertEqual("", report.sql)
+        self.assertTrue(any("partition key column not found" in e for e in report.errors))
+        # 不受推荐的分区键类型（decimal）生成时给出警告
+        decimal_key = self._generate(dialect="mysql", create_partition=True,
+                                     partition_key="amt", partition_start="20260920")
+        self.assertTrue(any("primitive type 'amount'" in w for w in decimal_key.warnings))
+
+    def test_shard_key_unique_index_warnings(self):
+        # 分片键不在唯一索引/主键中：TDSQL 逐条告警，GoldenDB 告警主键缺失
+        tdsql = self._generate(dialect="tdsql", shard_type="shard", shard_key="amt")
+        self.assertIn("primary key does not include shard key amt", " ".join(tdsql.warnings))
+        self.assertIn("unique index uq_acct does not include shard key amt",
+                      " ".join(tdsql.warnings))
+        goldendb = self._generate(dialect="goldendb", shard_type="shard", shard_key="amt")
+        self.assertIn("shard key amt is not part of the primary key",
+                      " ".join(goldendb.warnings))
+        # 分片键在唯一索引与主键中：不产生分片键告警
+        clean = self._generate(dialect="tdsql", shard_type="shard", shard_key="acct_no")
+        self.assertEqual([], [w for w in clean.warnings if "shard key" in w])
+        clean_goldendb = self._generate(dialect="goldendb", shard_type="shard",
+                                        shard_key="acct_no")
+        self.assertEqual([], [w for w in clean_goldendb.warnings if "shard key" in w])
 
 
 if __name__ == "__main__":

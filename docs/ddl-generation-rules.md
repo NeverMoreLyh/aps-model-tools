@@ -1,9 +1,11 @@
 # APS 元数据模型 → 数据库建表脚本：生成规则梳理
 
-> 版本：0.18.10
+> 版本：0.18.11
 
 > 依据 `aps-maven/aps-model-util` 源码与 FreeMarker 模板逆向整理，
 > 作为统一 DDL 生成工具（`apsgraph ddl-gen`）的实现基准。
+> 0.18.11 起扩展支持 MySQL 家族分布式方言 `tdsql`/`goldendb`（表分片类型分布子句）
+> 与 RANGE 按日分区子句（见 §4.5、§4.6），参数仅来自生成请求，不写回元数据。
 >
 > 模板路径：`aps-maven/aps-model-util/src/main/resources/cn/sunline/ltts/frw/model/generator/sql/`
 > Java 入口：`cn.sunline.ltts.frw.model.generator.sql.DdlGenerator` / `TableDdlUtil`
@@ -69,11 +71,12 @@ Schema 中的 `restrictionType` 沿 `base` 递归到最底层 `SimpleType` 后�
 
 | 方言/模板 | 类型映射来源 | 支持结论 |
 |---|---|---|
-| `tdsql`、`oceanbase` | 复用 MySQL 映射和 MySQL 二次转换 | MySQL 家族等价支持 |
-| `gaussdb` | 复用 Oracle 映射和 Oracle 二次转换 | Oracle 家族等价支持 |
-| `goldendb` | 独立映射，基本等同 MySQL | 可生成，按 GoldenDB 映射表执行 |
-| `db2` | 独立映射，覆盖字符串、数值、日期时间、`blob` | 可生成；未命中类型按原名透传 |
-| `db2as400` | 使用 DB2 模板链 | 可生成；类型能力以 DB2 映射为准 |
+| `tdsql` | 复用 MySQL 映射和 MySQL 二次转换 | **工具已支持**：MySQL 家族全链路 + `shardkey=` 分布子句（§4.5） |
+| `goldendb` | 独立映射，基本等同 MySQL | **工具已支持**：类型映射复用 MySQL + `DISTRIBUTED BY` 分布子句（§4.5） |
+| `oceanbase` | 复用 MySQL 映射和 MySQL 二次转换 | MySQL 家族等价支持（工具未内置） |
+| `gaussdb` | 复用 Oracle 映射和 Oracle 二次转换 | Oracle 家族等价支持（工具未内置） |
+| `db2` | 独立映射，覆盖字符串、数值、日期时间、`blob` | 可生成；未命中类型按原名透传（工具未内置） |
+| `db2as400` | 使用 DB2 模板链 | 可生成；类型能力以 DB2 映射为准（工具未内置） |
 | `sybase` | 模板内局部 `userTypeMap` | 有限支持；不能视为完整类型覆盖 |
 | `hsql` | 模板内局部 `userTypeMap` | 有限支持；模板局部映射优先 |
 | `sqlserver` | 独立映射（`nvarchar`、`datetime2`、`bit`、`varbinary(max)` 等） | 可生成，但不是 APSGraph 三主方言 |
@@ -81,6 +84,10 @@ Schema 中的 `restrictionType` 沿 `base` 递归到最底层 `SimpleType` 后�
 | `unknown` | 无可靠方言转换 | 仅兜底透传，不能视为兼容性支持 |
 
 部分方言映射表未包含全部基础类型；`baseTypeToDbType` 在未命中时回退为基础类型原名，因此文档将这类结果标记为“原样透传”。
+
+工具实现的方言全集为 `mysql / oracle / postgresql / tdsql / goldendb`；`tdsql`、`goldendb`
+与 `mysql` 同属 MySQL 兼容家族，共享反引号标识符、`AUTO_INCREMENT`、内联 `COMMENT`、
+`ENGINE=InnoDB` 表尾选项、`ksys_liusdy` 序列表约定与 varchar≥1000 转 `text` 的二次转换。
 
 ### Oracle（gaussdb 同表）
 | 基础类型 | 长度条件 | Oracle 类型 | 示例 |
@@ -192,6 +199,44 @@ comment on column 表名.列 is '长名(枚举...)';
 ```
 - 结构与 MySQL 基本一致：主键 ALTER 追加、注释 COMMENT ON、无表尾选项子句。
 - 长度计算用 `getPgsqlFieldLengthString`（仅 varchar/decimal 类追加长度，逻辑上等价于只对这两类生效）。
+
+### 4.5 分布子句：表分片类型（tdsql/goldendb，workbench 弹窗扩展）
+
+参考 dbm2（TDSQL/GoldenDB 迁移工具）的产品语义，表分片类型分三类，选择仅为本次生成的请求参数：
+
+| 表分片类型 | TDSQL 表尾子句 | GoldenDB 表尾子句 |
+|---|---|---|
+| 单表（GoldenDB 语境为“单节点存储表”） | 无子句（产品默认布局） | 有节点组时 ` DISTRIBUTED BY DUPLICATE(第一组)`，否则无子句 |
+| 分片表 | ` shardkey=<分片键>` | ` DISTRIBUTED BY HASH(<分片键>)[ (节点组列表)]`（节点组括号可选） |
+| 广播表（GoldenDB 语境为“复制表”） | ` shardkey=noshardkey_allset` | ` DISTRIBUTED BY DUPLICATE(节点组列表)`（节点组必填） |
+
+- 子句拼接在 MySQL 表尾选项（`ENGINE=... COMMENT='...'`）之后、语句分号之前；分片表展开（sharding>1 生成 `表名_0..N-1`）时每张展开表都带同一分布子句。
+- 分片键取物理列名（`dbname`/字段 id），必须真实存在于列定义中，否则该表报错且不产出 DDL（fail-closed）。
+- fail-closed 校验：分片类型仅 `tdsql`/`goldendb` 支持；分片表必填分片键；GoldenDB 复制表必填节点组；`shard_type` 取值仅 `normal/shard/broadcast`。
+- 约束告警（warnings，不阻塞生成，参考 dbm2 的产品级规则）：
+  - TDSQL：分片表的每条唯一索引（含主键）的列集合必须包含分片键（`TDSQL_UNIQUE_INDEX_SHARDKEY_REQUIRED` 语义）。
+  - GoldenDB：分片键必须全部包含在主键中（`GOLDENDB_DN_KEY_MUST_BE_IN_PRIMARY_KEY` 语义）。
+
+### 4.6 RANGE 分区子句（MySQL 家族方言，workbench 弹窗扩展）
+
+仅 `mysql/tdsql/goldendb` 支持；`partition_type` 目前仅 `range`。APSGraph 元数据没有分区边界信息，
+分区定义由弹窗的起始/终止日期（`yyyymmdd`）按日生成，均为请求参数，不写回元数据：
+
+- **按日分区**：分区名为上界减一天——小于 `20260921` 的数据落在 `p20260920`，即 `PARTITION p20260920 VALUES LESS THAN (20260921)`。
+- 起始日期（必填）= 第一个分区名；终止日期（可填）= 最后一个分区名（其上界为终止日+1）；终止日期留空时生成起始日单分区后追加 `PARTITION pmax VALUES LESS THAN (MAXVALUE)` 兜底。
+- **转换函数按分区键类型自动选择**（业务日期普遍为 `yyyymmdd` 字符串存储，各库对字符串日期分区支持不同）：
+
+| 分区键基础类型 | 表达式形态 | 分区定义上界字面量 |
+|---|---|---|
+| `date` / `dateTime` / `dateString8` | `PARTITION BY RANGE (TO_DAYS(列))` | `(TO_DAYS('20260921'))` |
+| `timestamp` | `PARTITION BY RANGE (UNIX_TIMESTAMP(列))` | `(UNIX_TIMESTAMP('20260921'))` |
+| `dateString` / `string`（yyyymmdd 字符串） | `PARTITION BY RANGE COLUMNS (列)`（字典序即日期序，无需转换函数） | `('20260921')` |
+| `int` / `integer` / `long`（yyyymmdd 整数） | `PARTITION BY RANGE (列)` | `(20260921)` |
+| 其他类型 | `PARTITION BY RANGE (列)`，并输出警告提示需人工确认 | `(20260921)` |
+
+- 分区键自动追加进主键列（MySQL 分区表要求分区键包含在主键/唯一索引中），与表 `partition` 属性的原有行为一致。
+- fail-closed 校验：分区仅 MySQL 家族支持；`create_partition` 开启时必填分区键与起始日期；起始 ≤ 终止；日期必须为合法 `yyyymmdd`。
+- sqlglot 校验按 mysql 方言执行；分布子句（`shardkey=`/`DISTRIBUTED BY`）先剥离、`RANGE COLUMNS` 降级为 `RANGE` 做语法近似校验（sqlglot 尚不识别 `RANGE COLUMNS` 关键字，表达式与列类型的匹配由数据库在执行侧保证）。
 
 ## 5. 序列生成（withseq，sql_macro.ftl generateSeq）
 

@@ -695,9 +695,72 @@ async function copyText(text) {
   }
 }
 
-function showDdlDialog(node) {
+// 分区键 primitive -> 转换函数提示（与后端 ddlgen._partition_style 一致）：
+// date 族 TO_DAYS、timestamp UNIX_TIMESTAMP、yyyymmdd 字符串 RANGE COLUMNS、整数直接列
+const DDL_PARTITION_HINTS = {
+  date: "TO_DAYS", dateTime: "TO_DAYS", dateString8: "TO_DAYS",
+  timestamp: "UNIX_TIMESTAMP",
+  dateString: "RANGE COLUMNS", string: "RANGE COLUMNS",
+  int: "直接列", integer: "直接列", long: "直接列",
+};
+
+function ddlPartitionHint(primitive) {
+  return DDL_PARTITION_HINTS[primitive] || (primitive ? "需人工确认" : "");
+}
+
+function ddlFieldInfo(detail) {
+  // 本表字段 + extension 继承字段，按物理列名去重（继承同名被本表覆盖）；
+  // tags 标注主键/唯一索引归属，供分片键下拉提示与约束警示
+  const all = [...(detail.fields || [])];
+  for (const ext of detail.extensions || []) all.push(...(ext.fields || []));
+  const rawToLogical = new Map();
+  const merged = new Map();
+  for (const f of all) {
+    const logical = (f.properties && f.properties.dbname) || f.raw_id;
+    rawToLogical.set(f.raw_id, logical);
+    if (!merged.has(logical)) merged.set(logical, f);
+  }
+  const tags = new Map();
+  const pkCols = new Set();
+  const addTag = (logical, tag) => {
+    if (!tags.has(logical)) tags.set(logical, new Set());
+    tags.get(logical).add(tag);
+  };
+  const uniqueIndexes = [];
+  for (const idx of detail.indexes || []) {
+    const props = idx.properties || {};
+    const itype = String(props.type || "").toLowerCase();
+    const cols = String(props.fields || "").split(/[\s,]+/).filter(Boolean)
+      .map((fid) => rawToLogical.get(fid) || fid);
+    if (itype === "primarykey") {
+      cols.forEach((c) => { addTag(c, "主键"); pkCols.add(c); });
+    } else if (itype === "unique") {
+      const name = props.id || idx.raw_id || "";
+      uniqueIndexes.push({ name, cols });
+      cols.forEach((c) => addTag(c, `唯一索引 ${name}`));
+    }
+  }
+  const options = [];
+  for (const [logical, f] of merged) {
+    if (f.properties && String(f.properties.primarykey).toLowerCase() === "true") pkCols.add(logical);
+    options.push({ logical, primitive: f.primitive || "", tags: [...(tags.get(logical) || [])] });
+  }
+  return { options, uniqueIndexes, pkCols };
+}
+
+function showDdlDialog(node, detail) {
   const overlay = document.createElement("div");
   overlay.className = "modal-overlay";
+  const info = ddlFieldInfo(detail || {});
+  const shardKeyOptions = info.options.map((f) => {
+    const suffix = f.tags.length ? `（${f.tags.join("、")}）` : "";
+    return `<option value="${esc(f.logical)}">${esc(f.logical + suffix)}</option>`;
+  }).join("");
+  const partitionKeyOptions = info.options.map((f) => {
+    const hint = ddlPartitionHint(f.primitive);
+    const label = hint ? `${f.logical}（${hint}）` : f.logical;
+    return `<option value="${esc(f.logical)}">${esc(label)}</option>`;
+  }).join("");
   overlay.innerHTML = `
     <div class="modal">
       <div class="modal-head">
@@ -711,9 +774,41 @@ function showDdlDialog(node) {
               <option value="mysql">MySQL</option>
               <option value="oracle">Oracle</option>
               <option value="postgresql">PostgreSQL</option>
+              <option value="tdsql">TDSQL</option>
+              <option value="goldendb">GoldenDB</option>
             </select>
           </label>
           <button id="ddl-generate" class="action-btn" style="margin-left:10px; margin-bottom:0;">生成</button>
+        </div>
+        <div id="ddl-distributed" class="hidden">
+          <label>表分片类型
+            <select id="ddl-shard-type">
+              <option value="normal" id="ddl-opt-normal">单表</option>
+              <option value="shard">分片表</option>
+              <option value="broadcast" id="ddl-opt-broadcast">广播表</option>
+            </select>
+          </label>
+          <label id="ddl-shard-key-row" class="hidden">分片键
+            <select id="ddl-shard-key">${shardKeyOptions}</select>
+          </label>
+          <div id="ddl-shard-warning" class="ddl-warn hidden"></div>
+          <label id="ddl-node-groups-row" class="hidden">节点组（逗号分隔）
+            <input type="text" id="ddl-node-groups" value="g1,g2,g3,g4">
+          </label>
+        </div>
+        <div>
+          <label><input type="checkbox" id="ddl-partition"> 创建分区表（RANGE 按日分区）</label>
+        </div>
+        <div id="ddl-partition-options" class="hidden">
+          <label>分区键
+            <select id="ddl-partition-key">${partitionKeyOptions}</select>
+          </label>
+          <label>起始日期(yyyymmdd)
+            <input type="text" id="ddl-partition-start" placeholder="20260901">
+          </label>
+          <label>终止日期(yyyymmdd，留空则以 MAXVALUE 兜底)
+            <input type="text" id="ddl-partition-end" placeholder="20260921">
+          </label>
         </div>
         <pre id="ddl-output" class="ddl-empty">选择数据库类型后点击“生成”。</pre>
         <button id="ddl-copy" class="action-btn hidden" style="align-self:flex-start;">复制 DDL</button>
@@ -725,13 +820,80 @@ function showDdlDialog(node) {
   overlay.addEventListener("click", (event) => { if (event.target === overlay) close(); });
   const output = overlay.querySelector("#ddl-output");
   const copyBtn = overlay.querySelector("#ddl-copy");
+  const dialectSel = overlay.querySelector("#ddl-dialect");
+  const distributedBox = overlay.querySelector("#ddl-distributed");
+  const shardTypeSel = overlay.querySelector("#ddl-shard-type");
+  const shardKeyRow = overlay.querySelector("#ddl-shard-key-row");
+  const shardKeySel = overlay.querySelector("#ddl-shard-key");
+  const shardWarning = overlay.querySelector("#ddl-shard-warning");
+  const nodeGroupsRow = overlay.querySelector("#ddl-node-groups-row");
+  const partitionCheck = overlay.querySelector("#ddl-partition");
+  const partitionBox = overlay.querySelector("#ddl-partition-options");
+
+  const updateShardWarning = () => {
+    const key = shardKeySel.value;
+    const dialect = dialectSel.value;
+    const messages = [];
+    if (dialect === "tdsql") {
+      const missing = info.uniqueIndexes.filter((uq) => !uq.cols.includes(key)).map((uq) => uq.name);
+      if (missing.length) messages.push(`唯一索引 ${missing.join("、")} 未包含分片键 ${key}：TDSQL 要求分片表的每条唯一索引（含主键）都必须包含分片键`);
+      if (!info.pkCols.has(key)) messages.push(`主键未包含分片键 ${key}`);
+    } else if (dialect === "goldendb" && !info.pkCols.has(key)) {
+      messages.push(`分片键 ${key} 不在主键中：GoldenDB 要求分片键必须包含在主键里`);
+    }
+    if (messages.length) {
+      shardWarning.textContent = `⚠ ${messages.join("；")}`;
+      shardWarning.classList.remove("hidden");
+    } else {
+      shardWarning.classList.add("hidden");
+    }
+  };
+
+  const updateControls = () => {
+    const dialect = dialectSel.value;
+    const distributed = dialect === "tdsql" || dialect === "goldendb";
+    distributedBox.classList.toggle("hidden", !distributed);
+    if (distributed) {
+      // 表分类文案按产品区分：TDSQL=单表/广播表，GoldenDB=单节点存储表/复制表
+      overlay.querySelector("#ddl-opt-normal").text = dialect === "tdsql" ? "单表" : "单节点存储表";
+      overlay.querySelector("#ddl-opt-broadcast").text = dialect === "tdsql" ? "广播表" : "复制表";
+    }
+    nodeGroupsRow.classList.toggle("hidden", dialect !== "goldendb");
+    shardKeyRow.classList.toggle("hidden", !distributed || shardTypeSel.value !== "shard");
+    if (!shardKeyRow.classList.contains("hidden")) updateShardWarning();
+    else shardWarning.classList.add("hidden");
+  };
+
+  dialectSel.addEventListener("change", updateControls);
+  shardTypeSel.addEventListener("change", updateControls);
+  shardKeySel.addEventListener("change", updateShardWarning);
+  partitionCheck.addEventListener("change", () => {
+    partitionBox.classList.toggle("hidden", !partitionCheck.checked);
+  });
+  updateControls();
+
   overlay.querySelector("#ddl-generate").addEventListener("click", async () => {
-    const dialect = overlay.querySelector("#ddl-dialect").value;
+    const dialect = dialectSel.value;
+    const params = { id: node.stable_id, dialect };
+    if (dialect === "tdsql" || dialect === "goldendb") {
+      params.shard_type = shardTypeSel.value;
+      if (shardTypeSel.value === "shard") params.shard_key = shardKeySel.value;
+      if (dialect === "goldendb") {
+        params.node_groups = overlay.querySelector("#ddl-node-groups").value.trim();
+      }
+    }
+    if (partitionCheck.checked) {
+      params.create_partition = "true";
+      params.partition_key = overlay.querySelector("#ddl-partition-key").value;
+      params.partition_type = "range";
+      params.partition_start = overlay.querySelector("#ddl-partition-start").value.trim();
+      params.partition_end = overlay.querySelector("#ddl-partition-end").value.trim();
+    }
     output.className = "ddl-empty";
     output.textContent = "生成中…";
     copyBtn.classList.add("hidden");
     try {
-      const payload = await api("/api/ddl", { id: node.stable_id, dialect });
+      const payload = await api("/api/ddl", params);
       const lines = [];
       if (payload.errors && payload.errors.length) lines.push(`-- 错误:\n-- ${payload.errors.join("\n-- ")}`);
       if (payload.warnings && payload.warnings.length) lines.push(`-- 警告:\n-- ${payload.warnings.join("\n-- ")}`);
@@ -846,7 +1008,7 @@ async function showDetail(nodeRef, isBack = false) {
     const backBtn = pane.querySelector("#btn-back");
     if (backBtn) backBtn.addEventListener("click", goBackDetail);
     const ddlBtn = pane.querySelector("#btn-gen-ddl");
-    if (ddlBtn) ddlBtn.addEventListener("click", () => showDdlDialog(node));
+    if (ddlBtn) ddlBtn.addEventListener("click", () => showDdlDialog(node, data.detail));
     pane.querySelectorAll("a.node-link").forEach((link) =>
       link.addEventListener("click", () => showDetail(link.dataset.id)));
     const tree = pane.querySelector(".tree");

@@ -624,6 +624,64 @@ class WorkbenchHttpTest(WorkbenchTestBase):
         with self.assertRaises(ValueError):
             validate_ddl_sql("select 1", "db2")
 
+    def test_ddl_distributed_and_partition_params(self):
+        status, body = self._get("/api/search?group=table&q=demo_user&field=id")
+        stable_id = json.loads(body)["results"][0]["stable_id"]
+        quoted = urllib.request.quote(stable_id)
+        # 新方言：tdsql/goldendb 默认单表，语法与 mysql 家族一致
+        for dialect in ("tdsql", "goldendb"):
+            status, body = self._get(f"/api/ddl?id={quoted}&dialect={dialect}")
+            self.assertEqual(200, status)
+            payload = json.loads(body)
+            self.assertIn("create table", payload["sql"].lower())
+            self.assertIn("ENGINE=InnoDB", payload["sql"])
+        # TDSQL 分片表：表尾 shardkey= 子句
+        status, body = self._get(f"/api/ddl?id={quoted}&dialect=tdsql&shard_type=shard&shard_key=id")
+        self.assertEqual(200, status)
+        self.assertIn(" shardkey=id", json.loads(body)["sql"])
+        # 分片表缺分片键 → 400
+        status, _ = self._get(f"/api/ddl?id={quoted}&dialect=tdsql&shard_type=shard")
+        self.assertEqual(400, status)
+        # 非分布式方言传分片参数 → 400
+        status, _ = self._get(f"/api/ddl?id={quoted}&dialect=mysql&shard_type=shard&shard_key=id")
+        self.assertEqual(400, status)
+        # GoldenDB 复制表缺节点组 → 400
+        status, _ = self._get(f"/api/ddl?id={quoted}&dialect=goldendb&shard_type=broadcast")
+        self.assertEqual(400, status)
+        # RANGE 分区（按日）：起始日期必填，yyyymmdd 格式
+        status, body = self._get(
+            f"/api/ddl?id={quoted}&dialect=mysql&create_partition=true&partition_key=id"
+            f"&partition_type=range&partition_start=20260920")
+        self.assertEqual(200, status)
+        payload = json.loads(body)
+        self.assertIn("PARTITION BY RANGE COLUMNS (`id`)", payload["sql"])
+        self.assertIn("PARTITION pmax VALUES LESS THAN (MAXVALUE)", payload["sql"])
+        # 非法日期格式 → 400
+        status, _ = self._get(
+            f"/api/ddl?id={quoted}&dialect=mysql&create_partition=true&partition_key=id"
+            f"&partition_type=range&partition_start=2026-09-20")
+        self.assertEqual(400, status)
+
+    def test_ddl_validation_strips_nonstandard_clauses(self):
+        try:
+            import sqlglot  # noqa: F401
+        except ImportError:
+            self.skipTest("sqlglot optional dependency not installed")
+        # 分布子句被剥离、RANGE COLUMNS 降级为 RANGE 后按 mysql 语法校验
+        result = validate_ddl_sql(
+            "create table `demo` (`id` varchar(10) not null, `d` varchar(8) not null) "
+            "ENGINE=InnoDB shardkey=id PARTITION BY RANGE COLUMNS (`d`) "
+            "(PARTITION p20260920 VALUES LESS THAN ('20260921'));",
+            "tdsql")
+        self.assertTrue(result["available"])
+        self.assertTrue(result["valid"])
+        result = validate_ddl_sql(
+            "create table `demo` (`id` bigint(16) not null) "
+            "DISTRIBUTED BY HASH(id) (g1,g2,g3,g4);",
+            "goldendb")
+        self.assertTrue(result["available"])
+        self.assertTrue(result["valid"])
+
     def test_second_bind_on_same_port_fails_closed(self):
         # 回归：Windows 的 SO_REUSEADDR 曾允许两个实例同时"成功"绑定同一端口
         # 且不报任何冲突；重复绑定必须报错（fail-closed）

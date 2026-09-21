@@ -217,9 +217,9 @@ def build_parser() -> argparse.ArgumentParser:
     ddl.add_argument("--dialect", default="mysql")
     ddl.add_argument("--output", type=Path)
 
-    ddlgen = sub.add_parser("ddl-gen", help="generate MySQL/Oracle/PostgreSQL DDL for all (or selected) tables from the SQLite model index")
+    ddlgen = sub.add_parser("ddl-gen", help="generate MySQL/Oracle/PostgreSQL/TDSQL/GoldenDB DDL for all (or selected) tables from the SQLite model index")
     ddlgen.add_argument("--db", type=Path, default=DEFAULT_DB)
-    ddlgen.add_argument("--dialect", choices=["mysql", "oracle", "postgresql"], default="mysql")
+    ddlgen.add_argument("--dialect", choices=["mysql", "oracle", "postgresql", "tdsql", "goldendb"], default="mysql")
     ddlgen.add_argument("--tables", nargs="*", default=[], metavar="QUERY",
                         help="optional table queries; default: all TABLE nodes")
     ddlgen.add_argument("--output", type=Path, help="write SQL script to file")

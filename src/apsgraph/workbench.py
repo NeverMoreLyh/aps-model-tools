@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import signal
 import sqlite3
 import subprocess
@@ -32,7 +33,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 from urllib.parse import parse_qs, urlparse
 
-from .ddlgen import DdlGenConfig, generate_all_ddl
+from .ddlgen import DdlGenConfig, generate_all_ddl, _resolve_type_ref
 from .registry import (
     WorkspaceRef, default_selection, resolve_workspace, touch_workspace,
     workspace_overview,
@@ -243,7 +244,18 @@ def top_groups(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
     return [{"kind": row["kind"], "count": row["total"]} for row in rows]
 
 
-DDL_DIALECTS = {"mysql": "mysql", "oracle": "oracle", "postgresql": "postgres"}
+DDL_DIALECTS = {"mysql": "mysql", "oracle": "oracle", "postgresql": "postgres",
+                "tdsql": "mysql", "goldendb": "mysql"}
+
+# 分布式方言的表尾分布子句（shardkey=... / DISTRIBUTED BY ...）不是标准 MySQL 语法，
+# sqlglot 按 mysql 方言校验前先剥离；PARTITION BY 是标准语法，无需剥离
+_DISTRIBUTION_CLAUSE_RE = re.compile(
+    r"shardkey\s*=\s*\S+"
+    r"|DISTRIBUTED\s+BY\s+(?:HASH|DUPLICATE)\s*\([^)]*\)(?:\s*\([^)]*\))?",
+    re.IGNORECASE)
+# sqlglot 的 mysql 方言不识别 RANGE COLUMNS 关键字；校验前降级为 RANGE 做语法近似
+#（表达式与列类型的匹配由数据库在执行侧保证）
+_RANGE_COLUMNS_RE = re.compile(r"RANGE\s+COLUMNS", re.IGNORECASE)
 
 
 def validate_ddl_sql(sql: str, dialect: str) -> Dict[str, Any]:
@@ -264,8 +276,12 @@ def validate_ddl_sql(sql: str, dialect: str) -> Dict[str, Any]:
     except ImportError:
         return {"available": False, "valid": None, "errors": [], "statements": 0,
                 "hint": "可选依赖 sqlglot 未安装，跳过 SQL 校验（pip install sqlglot）"}
+    text = sql
+    if dialect in ("tdsql", "goldendb"):
+        text = _DISTRIBUTION_CLAUSE_RE.sub("", text)
+    text = _RANGE_COLUMNS_RE.sub("RANGE", text)
     try:
-        statements = [stmt for stmt in sqlglot.parse(sql, read=DDL_DIALECTS[dialect])
+        statements = [stmt for stmt in sqlglot.parse(text, read=DDL_DIALECTS[dialect])
                       if stmt is not None]
     except ParseError as exc:
         return {"available": True, "valid": False, "errors": [str(exc)], "statements": 0,
@@ -521,9 +537,23 @@ def _table_extensions(conn: sqlite3.Connection, node_id: int) -> List[Dict[str, 
             "full_id": row["full_id"] if resolved else row["raw_target"],
             "stable_id": row["stable_id"] if resolved else None,
             "resolved": resolved,
-            "fields": _descendants_of_kind(conn, row["tid"], "FIELD") if resolved else [],
+            "fields": [_with_primitive(conn, f)
+                       for f in _descendants_of_kind(conn, row["tid"], "FIELD")] if resolved else [],
         })
     return extensions
+
+
+def _with_primitive(conn: sqlite3.Connection, node: Dict[str, Any]) -> Dict[str, Any]:
+    """Attach the resolved primitive type name (empty when unresolvable);
+    the DDL dialog uses it to hint the partition conversion function."""
+    data = dict(node)
+    type_ref = (data.get("properties") or {}).get("type")
+    primitive = ""
+    if type_ref:
+        resolved, _, _ = _resolve_type_ref(conn, str(type_ref))
+        primitive = resolved or ""
+    data["primitive"] = primitive
+    return data
 
 
 def _table_detail(conn: sqlite3.Connection, node_id: int) -> Dict[str, Any]:
@@ -535,7 +565,7 @@ def _table_detail(conn: sqlite3.Connection, node_id: int) -> Dict[str, Any]:
     indexes = [node for node in _descendants_of_kind(conn, node_id, "INDEX")
                if node["id"] not in odb_ids]
     return {
-        "fields": _descendants_of_kind(conn, node_id, "FIELD"),
+        "fields": [_with_primitive(conn, f) for f in _descendants_of_kind(conn, node_id, "FIELD")],
         "extensions": _table_extensions(conn, node_id),
         "indexes": indexes,
         "odbindexes": odbindexes,
@@ -814,15 +844,26 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
         dialect = params.get("dialect", ["mysql"])[0]
         if not node_ref:
             raise ValueError("missing node id")
-        if dialect not in {"mysql", "oracle", "postgresql"}:
+        if dialect not in DDL_DIALECTS:
             raise ValueError(f"unsupported dialect: {dialect}")
+        cfg = DdlGenConfig(
+            dialect=dialect,
+            shard_type=params.get("shard_type", ["normal"])[0] or "normal",
+            shard_key=params.get("shard_key", [""])[0],
+            node_groups=params.get("node_groups", [""])[0],
+            create_partition=params.get("create_partition", [""])[0].strip().lower() == "true",
+            partition_key=params.get("partition_key", [""])[0],
+            partition_type=params.get("partition_type", ["range"])[0] or "range",
+            partition_start=params.get("partition_start", [""])[0],
+            partition_end=params.get("partition_end", [""])[0],
+        )
         conn = connect(ref.db_path, read_only=True)
         try:
             row = conn.execute("select kind from nodes where stable_id=?",
                                (_resolve_node_row(conn, node_ref)["stable_id"],)).fetchone()
             if row is None or row[0] != "TABLE":
                 raise ValueError(f"DDL preview is only available for TABLE nodes: {node_ref}")
-            report = generate_all_ddl(conn, DdlGenConfig(dialect=dialect), [node_ref])
+            report = generate_all_ddl(conn, cfg, [node_ref])
             return {"dialect": dialect, "sql": report.sql,
                     "warnings": report.warnings, "errors": report.errors,
                     "validation": validate_ddl_sql(report.sql, dialect)}

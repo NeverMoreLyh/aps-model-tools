@@ -295,7 +295,10 @@ def validate_ddl_sql(sql: str, dialect: str) -> Dict[str, Any]:
                 "hint": ""}
     # ddl-gen legitimately emits create/alter/index plus sequence seed
     # insert/delete statements; any successful dialect parse is valid SQL.
-    create_tables = sum(1 for stmt in statements if getattr(stmt, "key", "") == "create")
+    # Create carries key="create" for tables AND indexes, so count by kind.
+    create_tables = sum(
+        1 for stmt in statements
+        if getattr(stmt, "key", "") == "create" and getattr(stmt, "kind", "") == "TABLE")
     if create_tables == 0:
         return {"available": True, "valid": False,
                 "errors": ["no CREATE TABLE statement found in generated DDL"],

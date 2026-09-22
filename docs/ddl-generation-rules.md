@@ -1,12 +1,13 @@
 # APS 元数据模型 → 数据库建表脚本：生成规则梳理
 
-> 版本：0.18.12
+> 版本：0.18.13
 
 > 依据 `aps-maven/aps-model-util` 源码与 FreeMarker 模板逆向整理，
 > 作为统一 DDL 生成工具（`apsgraph ddl-gen`）的实现基准。
 > 0.18.11 起扩展支持 MySQL 家族分布式方言 `tdsql`/`goldendb`（表分片类型分布子句）
 > 与 RANGE 按日分区子句；0.18.12 起 RANGE 分区扩展到全部五种方言（见 §4.5、§4.6），
-> 分区/分布参数仅来自生成请求，不写回元数据。
+> 分区/分布参数仅来自生成请求，不写回元数据。0.18.13 起内联分区定义格式化为多行
+> （每个分区一行、两格缩进，收尾括号独立成行）。
 >
 > 模板路径：`aps-maven/aps-model-util/src/main/resources/cn/sunline/ltts/frw/model/generator/sql/`
 > Java 入口：`cn.sunline.ltts.frw.model.generator.sql.DdlGenerator` / `TableDdlUtil`
@@ -239,7 +240,7 @@ comment on column 表名.列 is '长名(枚举...)';
 | 其他类型（decimal/clob/blob 等） | 直接列 + 警告提示需人工确认 | 同左 | 同左 |
 
 - **分区定义形态按方言区分**：
-  - mysql 家族与 oracle：内联在表尾——`... PARTITION BY RANGE (列) (PARTITION p... VALUES LESS THAN (...), ...)`。oracle 中分区子句位于 `tablespace` 等物理属性之前；oracle `virtual=true` 的全局临时表不允许分区（fail-closed 报错）。
+  - mysql 家族与 oracle：内联在表尾——`... PARTITION BY RANGE (列) (\n  PARTITION p... VALUES LESS THAN (...), ...)`，定义块格式化为多行（每个分区一行、两格缩进，收尾括号独立成行，避免长日期区间挤成单行）。oracle 中分区子句位于 `tablespace` 等物理属性之前；oracle `virtual=true` 的全局临时表不允许分区（fail-closed 报错）。
   - postgresql：表尾仅输出 ` PARTITION BY RANGE (列)` 分区头，每个分区一条独立语句 `create table 表名_pYYYYMMDD partition of 表名 for values from (当日界值) to (次日界值);`，MAXVALUE 兜底对应 `create table 表名_pmax partition of 表名 default;`。
 - 分区键自动追加进主键列（MySQL/PG 分区表要求分区键包含在主键/唯一索引中），与表 `partition` 属性的原有行为一致。
 - fail-closed 校验：`create_partition` 开启时必填分区键与起始日期；起始 ≤ 终止；日期必须为合法 `yyyymmdd`。

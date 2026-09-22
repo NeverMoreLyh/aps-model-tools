@@ -786,7 +786,8 @@ def _partition_key_column(td: TableDef, cfg: DdlGenConfig) -> Tuple[str, str]:
 def _partition_clause(td: TableDef, cfg: DdlGenConfig, report: GenReport) -> str:
     """表尾 RANGE 分区子句：mysql 家族与 oracle 为内联完整定义（按日生成 pYYYYMMDD，
     上界为次日，终止日期留空时 pmax MAXVALUE 兜底）；postgresql 仅输出分区头，
-    分区定义为独立语句（见 _partition_statements）。"""
+    分区定义为独立语句（见 _partition_statements）。内联定义格式化为多行：
+    每个分区一行、两格缩进，收尾括号独立成行。"""
     if not cfg.create_partition:
         return ""
     pkey, primitive = _partition_key_column(td, cfg)
@@ -809,8 +810,8 @@ def _partition_clause(td: TableDef, cfg: DdlGenConfig, report: GenReport) -> str
         day = upper
     if not end_text:
         definitions.append("PARTITION pmax VALUES LESS THAN (MAXVALUE)")
-    return (f" PARTITION BY {keyword} ({_ident(pkey, cfg.dialect)}) ("
-            + ", ".join(definitions) + ")")
+    return (f"\nPARTITION BY {keyword} ({_ident(pkey, cfg.dialect)}) (\n  "
+            + ",\n  ".join(definitions) + "\n)")
 
 
 def _partition_statements(tname: str, td: TableDef, cfg: DdlGenConfig) -> List[str]:

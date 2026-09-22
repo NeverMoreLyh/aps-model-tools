@@ -617,6 +617,15 @@ class WorkbenchHttpTest(WorkbenchTestBase):
         self.assertFalse(bad["valid"])
         self.assertTrue(bad["errors"])
 
+        # create unique index 的 key 也是 "create"，但只有 CREATE TABLE 计入 statements
+        mixed = validate_ddl_sql(
+            "create table demo (id varchar(10) not null); "
+            "create unique index idx_demo on demo (id); "
+            "alter table demo add constraint pk_demo primary key (id);",
+            "mysql")
+        self.assertTrue(mixed["valid"])
+        self.assertEqual(1, mixed["statements"])
+
         skipped = validate_ddl_sql("  ", "mysql")
         self.assertFalse(skipped["available"])
         self.assertIsNone(skipped["valid"])

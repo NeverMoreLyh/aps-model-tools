@@ -270,15 +270,15 @@ class DistributedDdlTest(unittest.TestCase):
         self.assertTrue(any("shard key column not found" in e for e in report.errors))
 
     def test_range_partition_daily_definitions(self):
-        # yyyymmdd 字符串列：RANGE COLUMNS 直接比较；分区名=上界-1 天
+        # yyyymmdd 字符串列：RANGE COLUMNS 直接比较；分区名=上界-1 天；内联定义多行缩进
         report = self._generate(dialect="mysql", create_partition=True,
                                 partition_key="acct_date", partition_type="range",
                                 partition_start="20260920", partition_end="20260921")
         self.assertEqual([], report.errors)
         self.assertIn(
-            "PARTITION BY RANGE COLUMNS (`acct_date`) "
-            "(PARTITION p20260920 VALUES LESS THAN ('20260921'), "
-            "PARTITION p20260921 VALUES LESS THAN ('20260922'))",
+            "\nPARTITION BY RANGE COLUMNS (`acct_date`) (\n  "
+            "PARTITION p20260920 VALUES LESS THAN ('20260921'),\n  "
+            "PARTITION p20260921 VALUES LESS THAN ('20260922')\n)",
             report.sql)
         self.assertNotIn("pmax", report.sql)  # 指定终止日期时不追加 MAXVALUE
         # 分区键自动追加进主键（MySQL 分区表要求）
@@ -288,7 +288,7 @@ class DistributedDdlTest(unittest.TestCase):
         report = self._generate(dialect="tdsql", create_partition=True,
                                 partition_key="acct_date", partition_start="20260920")
         self.assertIn(
-            "PARTITION p20260920 VALUES LESS THAN ('20260921'), "
+            "PARTITION p20260920 VALUES LESS THAN ('20260921'),\n  "
             "PARTITION pmax VALUES LESS THAN (MAXVALUE)",
             report.sql)
 
@@ -297,22 +297,22 @@ class DistributedDdlTest(unittest.TestCase):
                                  partition_key="create_time", partition_start="20260920",
                                  partition_end="20260920")
         self.assertIn(
-            "PARTITION BY RANGE (`create_time`) "
-            "(PARTITION p20260920 VALUES LESS THAN (TO_DAYS('20260921')))",
+            "\nPARTITION BY RANGE (`create_time`) (\n  "
+            "PARTITION p20260920 VALUES LESS THAN (TO_DAYS('20260921'))\n)",
             to_days.sql)
         unix = self._generate(dialect="mysql", create_partition=True,
                               partition_key="upd_stamp", partition_start="20260920")
         self.assertIn(
-            "PARTITION BY RANGE (`upd_stamp`) "
-            "(PARTITION p20260920 VALUES LESS THAN (UNIX_TIMESTAMP('20260921')), "
-            "PARTITION pmax VALUES LESS THAN (MAXVALUE))",
+            "\nPARTITION BY RANGE (`upd_stamp`) (\n  "
+            "PARTITION p20260920 VALUES LESS THAN (UNIX_TIMESTAMP('20260921')),\n  "
+            "PARTITION pmax VALUES LESS THAN (MAXVALUE)\n)",
             unix.sql)
         passthrough = self._generate(dialect="mysql", create_partition=True,
                                      partition_key="rec_id", partition_start="20260920")
         self.assertIn(
-            "PARTITION BY RANGE (`rec_id`) "
-            "(PARTITION p20260920 VALUES LESS THAN (20260921), "
-            "PARTITION pmax VALUES LESS THAN (MAXVALUE))",
+            "\nPARTITION BY RANGE (`rec_id`) (\n  "
+            "PARTITION p20260920 VALUES LESS THAN (20260921),\n  "
+            "PARTITION pmax VALUES LESS THAN (MAXVALUE)\n)",
             passthrough.sql)
 
     def test_partition_config_fail_closed(self):
@@ -348,32 +348,32 @@ class DistributedDdlTest(unittest.TestCase):
                                 partition_end="20260920")
         self.assertEqual([], oracle.errors)
         self.assertIn(
-            ") PARTITION BY RANGE (create_time) "
-            "(PARTITION p20260919 VALUES LESS THAN (TO_DATE('20260920','YYYYMMDD')), "
-            "PARTITION p20260920 VALUES LESS THAN (TO_DATE('20260921','YYYYMMDD')));",
+            ")\nPARTITION BY RANGE (create_time) (\n  "
+            "PARTITION p20260919 VALUES LESS THAN (TO_DATE('20260920','YYYYMMDD')),\n  "
+            "PARTITION p20260920 VALUES LESS THAN (TO_DATE('20260921','YYYYMMDD'))\n);",
             oracle.sql)
         timestamp_key = self._generate(dialect="oracle", create_partition=True,
                                        partition_key="upd_stamp", partition_start="20260919")
         self.assertIn(
-            "PARTITION BY RANGE (upd_stamp) "
-            "(PARTITION p20260919 VALUES LESS THAN (TO_TIMESTAMP('20260920','YYYYMMDD')), "
-            "PARTITION pmax VALUES LESS THAN (MAXVALUE))",
+            "\nPARTITION BY RANGE (upd_stamp) (\n  "
+            "PARTITION p20260919 VALUES LESS THAN (TO_TIMESTAMP('20260920','YYYYMMDD')),\n  "
+            "PARTITION pmax VALUES LESS THAN (MAXVALUE)\n)",
             timestamp_key.sql)
         # dateString → oracle varchar2：字符串字面量直接比较（yyyymmdd 字典序即日期序）
         string_key = self._generate(dialect="oracle", create_partition=True,
                                     partition_key="acct_date", partition_start="20260919")
         self.assertIn(
-            "PARTITION BY RANGE (acct_date) "
-            "(PARTITION p20260919 VALUES LESS THAN ('20260920'), "
-            "PARTITION pmax VALUES LESS THAN (MAXVALUE))",
+            "\nPARTITION BY RANGE (acct_date) (\n  "
+            "PARTITION p20260919 VALUES LESS THAN ('20260920'),\n  "
+            "PARTITION pmax VALUES LESS THAN (MAXVALUE)\n)",
             string_key.sql)
         # long → oracle number：整数直接比较；分区键追加进主键
         number_key = self._generate(dialect="oracle", create_partition=True,
                                     partition_key="rec_id", partition_start="20260919",
                                     partition_end="20260919")
         self.assertIn(
-            "PARTITION BY RANGE (rec_id) "
-            "(PARTITION p20260919 VALUES LESS THAN (20260920))",
+            "\nPARTITION BY RANGE (rec_id) (\n  "
+            "PARTITION p20260919 VALUES LESS THAN (20260920)\n)",
             number_key.sql)
         # rec_id 已在主键中，不重复追加
         self.assertIn("add constraint pk_dist_order primary key (rec_id, acct_no)",

@@ -708,6 +708,29 @@ function ddlPartitionHint(primitive) {
   return DDL_PARTITION_HINTS[primitive] || (primitive ? "需人工确认" : "");
 }
 
+function ddlYyyymmddToDate(text) {
+  if (!/^\d{8}$/.test(text)) return null;
+  const year = +text.slice(0, 4);
+  const month = +text.slice(4, 6);
+  const day = +text.slice(6, 8);
+  const date = new Date(year, month - 1, day);
+  return (date.getFullYear() === year && date.getMonth() === month - 1 && date.getDate() === day)
+    ? date : null;
+}
+
+function ddlFormatYyyymmdd(date) {
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}`;
+}
+
+function ddlShiftMonth(base, count) {
+  // 月/年偏移：目标月没有同日（如 0331 减 1 个月）时对齐到月末 0228
+  const target = new Date(base.getFullYear(), base.getMonth() - count, 1);
+  const lastDay = new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate();
+  target.setDate(Math.min(base.getDate(), lastDay));
+  return target;
+}
+
 function ddlFieldInfo(detail) {
   // 本表字段 + extension 继承字段，按物理列名去重（继承同名被本表覆盖）；
   // tags 标注主键/唯一索引归属，供分片键下拉提示与约束警示
@@ -803,6 +826,27 @@ function showDdlDialog(node, detail) {
           <label>分区键
             <select id="ddl-partition-key">${partitionKeyOptions}</select>
           </label>
+          <div>
+            <label>基准日期
+              <input type="text" id="ddl-partition-base" placeholder="20260922" style="width:110px;">
+            </label>
+            <label>粒度
+              <select id="ddl-partition-unit">
+                <option value="D">日(D)</option>
+                <option value="M">月(M)</option>
+                <option value="Y">年(Y)</option>
+              </select>
+            </label>
+            <label>前置分区
+              <input type="number" id="ddl-partition-pre" value="30" min="0" style="width:64px;">
+            </label>
+            <label>后置分区
+              <input type="number" id="ddl-partition-post" value="7" min="0" style="width:64px;">
+            </label>
+            <button id="ddl-partition-calc" class="action-btn" style="margin-left:10px; margin-bottom:0;"
+              title="起始日期=基准日期向前推前置分区数个粒度，终止日期=基准日期向后推后置分区数个粒度">推算起止日期</button>
+          </div>
+          <div id="ddl-calc-warning" class="ddl-warn hidden"></div>
           <label>起始日期(yyyymmdd)
             <input type="text" id="ddl-partition-start" placeholder="20260901">
           </label>
@@ -869,6 +913,37 @@ function showDdlDialog(node, detail) {
   shardKeySel.addEventListener("change", updateShardWarning);
   partitionCheck.addEventListener("change", () => {
     partitionBox.classList.toggle("hidden", !partitionCheck.checked);
+  });
+  const baseInput = overlay.querySelector("#ddl-partition-base");
+  const unitSel = overlay.querySelector("#ddl-partition-unit");
+  const preInput = overlay.querySelector("#ddl-partition-pre");
+  const postInput = overlay.querySelector("#ddl-partition-post");
+  const startInput = overlay.querySelector("#ddl-partition-start");
+  const endInput = overlay.querySelector("#ddl-partition-end");
+  const calcWarning = overlay.querySelector("#ddl-calc-warning");
+  overlay.querySelector("#ddl-partition-calc").addEventListener("click", () => {
+    calcWarning.classList.add("hidden");
+    const base = ddlYyyymmddToDate(baseInput.value.trim());
+    if (!base) {
+      calcWarning.textContent = "⚠ 基准日期格式应为 yyyymmdd（如 20260922）";
+      calcWarning.classList.remove("hidden");
+      return;
+    }
+    const unit = unitSel.value;
+    const pre = Math.max(0, parseInt(preInput.value, 10) || 0);
+    const post = Math.max(0, parseInt(postInput.value, 10) || 0);
+    let start;
+    let end;
+    if (unit === "D") {
+      start = new Date(base); start.setDate(start.getDate() - pre);
+      end = new Date(base); end.setDate(end.getDate() + post);
+    } else {
+      const months = unit === "Y" ? 12 : 1;
+      start = ddlShiftMonth(base, pre * months);
+      end = ddlShiftMonth(base, post * months);
+    }
+    startInput.value = ddlFormatYyyymmdd(start);
+    endInput.value = ddlFormatYyyymmdd(end);
   });
   updateControls();
 

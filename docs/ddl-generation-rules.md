@@ -1,11 +1,12 @@
 # APS 元数据模型 → 数据库建表脚本：生成规则梳理
 
-> 版本：0.18.11
+> 版本：0.18.12
 
 > 依据 `aps-maven/aps-model-util` 源码与 FreeMarker 模板逆向整理，
 > 作为统一 DDL 生成工具（`apsgraph ddl-gen`）的实现基准。
 > 0.18.11 起扩展支持 MySQL 家族分布式方言 `tdsql`/`goldendb`（表分片类型分布子句）
-> 与 RANGE 按日分区子句（见 §4.5、§4.6），参数仅来自生成请求，不写回元数据。
+> 与 RANGE 按日分区子句；0.18.12 起 RANGE 分区扩展到全部五种方言（见 §4.5、§4.6），
+> 分区/分布参数仅来自生成请求，不写回元数据。
 >
 > 模板路径：`aps-maven/aps-model-util/src/main/resources/cn/sunline/ltts/frw/model/generator/sql/`
 > Java 入口：`cn.sunline.ltts.frw.model.generator.sql.DdlGenerator` / `TableDdlUtil`
@@ -217,26 +218,32 @@ comment on column 表名.列 is '长名(枚举...)';
   - TDSQL：分片表的每条唯一索引（含主键）的列集合必须包含分片键（`TDSQL_UNIQUE_INDEX_SHARDKEY_REQUIRED` 语义）。
   - GoldenDB：分片键必须全部包含在主键中（`GOLDENDB_DN_KEY_MUST_BE_IN_PRIMARY_KEY` 语义）。
 
-### 4.6 RANGE 分区子句（MySQL 家族方言，workbench 弹窗扩展）
+### 4.6 RANGE 分区子句（全部方言，workbench 弹窗扩展）
 
-仅 `mysql/tdsql/goldendb` 支持；`partition_type` 目前仅 `range`。APSGraph 元数据没有分区边界信息，
-分区定义由弹窗的起始/终止日期（`yyyymmdd`）按日生成，均为请求参数，不写回元数据：
+五种方言均支持；`partition_type` 目前仅 `range`。APSGraph 元数据没有分区边界信息，
+分区定义由弹窗的起始/终止日期（`yyyymmdd`）按日生成，均为请求参数，不写回元数据。
+弹窗提供快捷推算：输入基准日期、粒度（D/M/Y）与前置/后置分区数，起始日期=基准向前推
+前置分区数个粒度（月/年不足同日时对齐月末），终止日期=基准向后推后置分区数个粒度，
+推算结果回填起止日期输入框（仍可手工修改）。
 
 - **按日分区**：分区名为上界减一天——小于 `20260921` 的数据落在 `p20260920`，即 `PARTITION p20260920 VALUES LESS THAN (20260921)`。
-- 起始日期（必填）= 第一个分区名；终止日期（可填）= 最后一个分区名（其上界为终止日+1）；终止日期留空时生成起始日单分区后追加 `PARTITION pmax VALUES LESS THAN (MAXVALUE)` 兜底。
-- **转换函数按分区键类型自动选择**（业务日期普遍为 `yyyymmdd` 字符串存储，各库对字符串日期分区支持不同）：
+- 起始日期（必填）= 第一个分区名；终止日期（可填）= 最后一个分区名（其上界为终止日+1）；终止日期留空时生成起始日单分区后追加 MAXVALUE 兜底分区。
+- **转换函数按分区键类型（经方言映射后的目标 SQL 类型）自动选择**（业务日期普遍为 `yyyymmdd` 字符串存储，各库对字符串日期分区支持不同）：
 
-| 分区键基础类型 | 表达式形态 | 分区定义上界字面量 |
-|---|---|---|
-| `date` / `dateTime` / `dateString8` | `PARTITION BY RANGE (TO_DAYS(列))` | `(TO_DAYS('20260921'))` |
-| `timestamp` | `PARTITION BY RANGE (UNIX_TIMESTAMP(列))` | `(UNIX_TIMESTAMP('20260921'))` |
-| `dateString` / `string`（yyyymmdd 字符串） | `PARTITION BY RANGE COLUMNS (列)`（字典序即日期序，无需转换函数） | `('20260921')` |
-| `int` / `integer` / `long`（yyyymmdd 整数） | `PARTITION BY RANGE (列)` | `(20260921)` |
-| 其他类型 | `PARTITION BY RANGE (列)`，并输出警告提示需人工确认 | `(20260921)` |
+| 分区键类型 → 目标类型 | mysql 家族表达式 | oracle 表达式 | postgresql 表达式 |
+|---|---|---|---|
+| date/dateTime/dateString8 → date/dateTime/timestamp | `RANGE (TO_DAYS(列))`，界值 `(TO_DAYS('20260921'))` | `RANGE (列)`，界值 `(TO_DATE('20260921','YYYYMMDD'))` | `RANGE (列)`，界值 `('2026-09-21')` |
+| timestamp | `RANGE (UNIX_TIMESTAMP(列))`，界值 `(UNIX_TIMESTAMP('20260921'))` | `RANGE (列)`，界值 `(TO_TIMESTAMP('20260921','YYYYMMDD'))` | `RANGE (列)`，界值 `('2026-09-21 00:00:00')` |
+| dateString/string → varchar 类 | `RANGE COLUMNS (列)`（字典序即日期序，无需转换函数），界值 `('20260921')` | `RANGE (列)`，界值 `('20260921')` | `RANGE (列)`，界值 `('20260921')` |
+| int/integer/long → 整数 | `RANGE (列)`，界值 `(20260921)` | 同左 | 同左 |
+| 其他类型（decimal/clob/blob 等） | 直接列 + 警告提示需人工确认 | 同左 | 同左 |
 
-- 分区键自动追加进主键列（MySQL 分区表要求分区键包含在主键/唯一索引中），与表 `partition` 属性的原有行为一致。
-- fail-closed 校验：分区仅 MySQL 家族支持；`create_partition` 开启时必填分区键与起始日期；起始 ≤ 终止；日期必须为合法 `yyyymmdd`。
-- sqlglot 校验按 mysql 方言执行；分布子句（`shardkey=`/`DISTRIBUTED BY`）先剥离、`RANGE COLUMNS` 降级为 `RANGE` 做语法近似校验（sqlglot 尚不识别 `RANGE COLUMNS` 关键字，表达式与列类型的匹配由数据库在执行侧保证）。
+- **分区定义形态按方言区分**：
+  - mysql 家族与 oracle：内联在表尾——`... PARTITION BY RANGE (列) (PARTITION p... VALUES LESS THAN (...), ...)`。oracle 中分区子句位于 `tablespace` 等物理属性之前；oracle `virtual=true` 的全局临时表不允许分区（fail-closed 报错）。
+  - postgresql：表尾仅输出 ` PARTITION BY RANGE (列)` 分区头，每个分区一条独立语句 `create table 表名_pYYYYMMDD partition of 表名 for values from (当日界值) to (次日界值);`，MAXVALUE 兜底对应 `create table 表名_pmax partition of 表名 default;`。
+- 分区键自动追加进主键列（MySQL/PG 分区表要求分区键包含在主键/唯一索引中），与表 `partition` 属性的原有行为一致。
+- fail-closed 校验：`create_partition` 开启时必填分区键与起始日期；起始 ≤ 终止；日期必须为合法 `yyyymmdd`。
+- sqlglot 校验：mysql 家族按 mysql 方言（`shardkey=`/`DISTRIBUTED BY` 先剥离、`RANGE COLUMNS` 降级为 `RANGE`）；oracle 剥离内联分区子句后校验（sqlglot 不解析该子句）；PG 的分区头与 `PARTITION OF` 语句为其原生语法，直接校验。
 
 ## 5. 序列生成（withseq，sql_macro.ftl generateSeq）
 

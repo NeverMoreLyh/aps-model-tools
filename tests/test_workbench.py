@@ -681,6 +681,15 @@ class WorkbenchHttpTest(WorkbenchTestBase):
             "goldendb")
         self.assertTrue(result["available"])
         self.assertTrue(result["valid"])
+        # oracle：内联 RANGE 分区子句被剥离后按 oracle 语法校验（sqlglot 不解析该子句）
+        result = validate_ddl_sql(
+            "create table demo (id number(10) not null, d date not null) "
+            "PARTITION BY RANGE (d) "
+            "(PARTITION p20260920 VALUES LESS THAN (TO_DATE('20260921','YYYYMMDD')), "
+            "PARTITION pmax VALUES LESS THAN (MAXVALUE))",
+            "oracle")
+        self.assertTrue(result["available"])
+        self.assertTrue(result["valid"])
 
     def test_second_bind_on_same_port_fails_closed(self):
         # 回归：Windows 的 SO_REUSEADDR 曾允许两个实例同时"成功"绑定同一端口

@@ -547,11 +547,19 @@ def _emit_table(td: TableDef, cfg: DdlGenConfig, report: GenReport) -> List[str]
             lines_sql += _distribution_clause(cfg)
             lines_sql += _partition_clause(td, cfg, report)
         elif dialect == "oracle":
+            if td.virtual and cfg.create_partition:
+                raise ValueError(f"{td.name}: global temporary table cannot be partitioned")
+            # Oracle 语法：分区子句在物理属性（tablespace）之前
+            lines_sql += _partition_clause(td, cfg, report)
             if cfg.table_space:
                 lines_sql += f" tablespace {cfg.table_space}"
             if td.virtual:
                 lines_sql += " on commit delete rows"
+        elif dialect == "postgresql":
+            lines_sql += _partition_clause(td, cfg, report)
         out.append(lines_sql + ";")
+        if dialect == "postgresql":
+            out.extend(_partition_statements(tname, td, cfg))
 
         # 主键（ALTER 追加，与原生模板一致；Oracle keyProcess 内联模式此处统一走 ALTER）
         if td.pk_columns:
@@ -665,7 +673,6 @@ _YYYYMMDD_RE = re.compile(r"\d{8}")
 # 分区键 primitive -> 转换函数：date 族用 TO_DAYS，timestamp 用 UNIX_TIMESTAMP，
 # yyyymmdd 字符串用 RANGE COLUMNS 直接比较（字典序即日期序），整数直接比较
 _DATE_RANGE_PRIMITIVES = ("date", "dateTime", "dateString8")
-_PASSTHROUGH_RANGE_PRIMITIVES = ("int", "integer", "long")
 
 
 def _parse_yyyymmdd(value: str, label: str) -> datetime.date:
@@ -695,8 +702,6 @@ def _validate_distributed_config(cfg: DdlGenConfig) -> None:
     if cfg.dialect == "goldendb" and cfg.shard_type == "broadcast" and not _node_group_list(cfg):
         raise ValueError("node_groups is required for GoldenDB replicated (broadcast) tables")
     if cfg.create_partition:
-        if cfg.dialect not in MYSQL_FAMILY:
-            raise ValueError(f"partitioning is only supported for {MYSQL_FAMILY}, not {cfg.dialect}")
         if cfg.partition_type != "range":
             raise ValueError("only range partitioning is currently supported")
         if not cfg.partition_key.strip():
@@ -728,47 +733,109 @@ def _distribution_clause(cfg: DdlGenConfig) -> str:
     return f" DISTRIBUTED BY HASH({key}){suffix}"
 
 
-def _partition_style(primitive: str) -> Tuple[str, Any]:
-    """按分区键 primitive 返回 (RANGE 关键字, 上界日期渲染函数)。"""
-    if primitive in _DATE_RANGE_PRIMITIVES:
-        return "RANGE", lambda d: f"TO_DAYS('{d}')"
-    if primitive == "timestamp":
-        return "RANGE", lambda d: f"UNIX_TIMESTAMP('{d}')"
-    if primitive in ("dateString", "string"):
-        return "RANGE COLUMNS", lambda d: f"'{d}'"
-    return "RANGE", lambda d: d
+# 分区键可安全做 RANGE 分区键的目标 SQL 类型（其余类型给出警告）
+_PARTITIONABLE_SQL_TYPES = {"date", "dateTime", "timestamp", "varchar", "varchar2", "char",
+                            "int", "bigint", "integer", "number"}
 
 
-def _partition_clause(td: TableDef, cfg: DdlGenConfig, report: GenReport) -> str:
-    """RANGE 分区子句：按日生成 pYYYYMMDD（上界为次日），终止日期留空时 pmax MAXVALUE 兜底。"""
-    if not cfg.create_partition:
-        return ""
+def _partition_style(primitive: str, dialect: str) -> Tuple[str, Any]:
+    """按分区键 primitive 与方言返回 (RANGE 关键字, 分区界值渲染函数)。
+
+    渲染函数接收界值日期（datetime.date），输出分区定义中的界值表达式：
+    - mysql 家族：date 族 TO_DAYS、timestamp UNIX_TIMESTAMP、yyyymmdd 字符串
+      RANGE COLUMNS 直接比较、整数直接比较
+    - oracle：date 族 TO_DATE、timestamp TO_TIMESTAMP、varchar2/number 直接字面量
+    - postgresql：无转换函数，直接列比较，界值字面量按列类型选格式
+    """
+    if dialect in MYSQL_FAMILY:
+        if primitive in _DATE_RANGE_PRIMITIVES:
+            return "RANGE", lambda d: f"TO_DAYS('{d:%Y%m%d}')"
+        if primitive == "timestamp":
+            return "RANGE", lambda d: f"UNIX_TIMESTAMP('{d:%Y%m%d}')"
+        if primitive in ("dateString", "string"):
+            return "RANGE COLUMNS", lambda d: f"'{d:%Y%m%d}'"
+        return "RANGE", lambda d: f"{d:%Y%m%d}"
+    sql_base = TYPE_BASE[dialect].get(primitive, "")
+    if dialect == "oracle":
+        if sql_base == "date":
+            return "RANGE", lambda d: f"TO_DATE('{d:%Y%m%d}','YYYYMMDD')"
+        if sql_base == "timestamp":
+            return "RANGE", lambda d: f"TO_TIMESTAMP('{d:%Y%m%d}','YYYYMMDD')"
+        if sql_base in ("varchar2", "char"):
+            return "RANGE", lambda d: f"'{d:%Y%m%d}'"
+        return "RANGE", lambda d: f"{d:%Y%m%d}"
+    # postgresql
+    if sql_base == "date":
+        return "RANGE", lambda d: f"'{d:%Y-%m-%d}'"
+    if sql_base == "timestamp":
+        return "RANGE", lambda d: f"'{d:%Y-%m-%d} 00:00:00'"
+    if sql_base in ("varchar", "char"):
+        return "RANGE", lambda d: f"'{d:%Y%m%d}'"
+    return "RANGE", lambda d: f"{d:%Y%m%d}"
+
+
+def _partition_key_column(td: TableDef, cfg: DdlGenConfig) -> Tuple[str, str]:
+    """返回 (分区键列名, primitive)；列不存在时 fail-closed 报错。"""
     pkey = cfg.partition_key.strip()
     matched = [c for c in td.columns if c.logical_id == pkey]
     if not matched:
         raise ValueError(f"partition key column not found: {pkey}")
-    primitive = matched[0].primitive
-    keyword, bound = _partition_style(primitive)
-    if (primitive not in _DATE_RANGE_PRIMITIVES and primitive != "timestamp"
-            and primitive not in ("dateString", "string")
-            and primitive not in _PASSTHROUGH_RANGE_PRIMITIVES):
+    return pkey, matched[0].primitive
+
+
+def _partition_clause(td: TableDef, cfg: DdlGenConfig, report: GenReport) -> str:
+    """表尾 RANGE 分区子句：mysql 家族与 oracle 为内联完整定义（按日生成 pYYYYMMDD，
+    上界为次日，终止日期留空时 pmax MAXVALUE 兜底）；postgresql 仅输出分区头，
+    分区定义为独立语句（见 _partition_statements）。"""
+    if not cfg.create_partition:
+        return ""
+    pkey, primitive = _partition_key_column(td, cfg)
+    keyword, render = _partition_style(primitive, cfg.dialect)
+    if TYPE_BASE[cfg.dialect].get(primitive, "") not in _PARTITIONABLE_SQL_TYPES:
         report.warnings.append(
             f"{td.name}: partition key {pkey} has primitive type '{primitive}'; "
             "date/timestamp/yyyymmdd string/integer types are recommended for range partitioning")
     day = _parse_yyyymmdd(cfg.partition_start, "partition_start")
     end_text = cfg.partition_end.strip()
+    if cfg.dialect == "postgresql":
+        return f" PARTITION BY {keyword} ({_ident(pkey, cfg.dialect)})"
     definitions: List[str] = []
     while True:
         # 分区名=当日，上界=次日：小于 20260921 的数据落在 p20260920
-        upper = (day + datetime.timedelta(days=1)).strftime("%Y%m%d")
-        definitions.append(f"PARTITION p{day.strftime('%Y%m%d')} VALUES LESS THAN ({bound(upper)})")
+        upper = day + datetime.timedelta(days=1)
+        definitions.append(f"PARTITION p{day:%Y%m%d} VALUES LESS THAN ({render(upper)})")
         if not end_text or day.strftime("%Y%m%d") == end_text:
             break
-        day = day + datetime.timedelta(days=1)
+        day = upper
     if not end_text:
         definitions.append("PARTITION pmax VALUES LESS THAN (MAXVALUE)")
     return (f" PARTITION BY {keyword} ({_ident(pkey, cfg.dialect)}) ("
             + ", ".join(definitions) + ")")
+
+
+def _partition_statements(tname: str, td: TableDef, cfg: DdlGenConfig) -> List[str]:
+    """postgresql 的分区定义：每分区一条 create table ... partition of ... 语句
+    （PG 不支持内联分区定义；DEFAULT 分区承担 MAXVALUE 兜底语义）。"""
+    if not cfg.create_partition or cfg.dialect != "postgresql":
+        return []
+    _, primitive = _partition_key_column(td, cfg)
+    _, render = _partition_style(primitive, cfg.dialect)
+    day = _parse_yyyymmdd(cfg.partition_start, "partition_start")
+    end_text = cfg.partition_end.strip()
+    stmts: List[str] = []
+    while True:
+        upper = day + datetime.timedelta(days=1)
+        stmts.append(
+            f"create table {_ident(tname + '_p' + day.strftime('%Y%m%d'), cfg.dialect)} "
+            f"partition of {_ident(tname, cfg.dialect)} "
+            f"for values from ({render(day)}) to ({render(upper)});")
+        if not end_text or day.strftime("%Y%m%d") == end_text:
+            break
+        day = upper
+    if not end_text:
+        stmts.append(f"create table {_ident(tname + '_pmax', cfg.dialect)} partition of "
+                     f"{_ident(tname, cfg.dialect)} default;")
+    return stmts
 
 
 def _warn_shard_key_uniques(td: TableDef, cfg: DdlGenConfig, report: GenReport) -> None:

@@ -331,9 +331,6 @@ class DistributedDdlTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             self._generate(dialect="mysql", create_partition=True, partition_key="acct_date",
                            partition_start="20260920", partition_end="20260901")
-        with self.assertRaises(ValueError):
-            self._generate(dialect="oracle", create_partition=True, partition_key="acct_date",
-                           partition_start="20260920")  # 仅 MySQL 家族支持分区
         # 分区键列不存在：报错且不产出该表 DDL
         report = self._generate(dialect="mysql", create_partition=True, partition_key="nope",
                                 partition_start="20260920")
@@ -343,6 +340,94 @@ class DistributedDdlTest(unittest.TestCase):
         decimal_key = self._generate(dialect="mysql", create_partition=True,
                                      partition_key="amt", partition_start="20260920")
         self.assertTrue(any("primitive type 'amount'" in w for w in decimal_key.warnings))
+
+    def test_oracle_partition_clauses(self):
+        # dateTime → oracle date：TO_DATE 界值；分区子句在 tablespace 之前；无反引号
+        oracle = self._generate(dialect="oracle", create_partition=True,
+                                partition_key="create_time", partition_start="20260919",
+                                partition_end="20260920")
+        self.assertEqual([], oracle.errors)
+        self.assertIn(
+            ") PARTITION BY RANGE (create_time) "
+            "(PARTITION p20260919 VALUES LESS THAN (TO_DATE('20260920','YYYYMMDD')), "
+            "PARTITION p20260920 VALUES LESS THAN (TO_DATE('20260921','YYYYMMDD')));",
+            oracle.sql)
+        timestamp_key = self._generate(dialect="oracle", create_partition=True,
+                                       partition_key="upd_stamp", partition_start="20260919")
+        self.assertIn(
+            "PARTITION BY RANGE (upd_stamp) "
+            "(PARTITION p20260919 VALUES LESS THAN (TO_TIMESTAMP('20260920','YYYYMMDD')), "
+            "PARTITION pmax VALUES LESS THAN (MAXVALUE))",
+            timestamp_key.sql)
+        # dateString → oracle varchar2：字符串字面量直接比较（yyyymmdd 字典序即日期序）
+        string_key = self._generate(dialect="oracle", create_partition=True,
+                                    partition_key="acct_date", partition_start="20260919")
+        self.assertIn(
+            "PARTITION BY RANGE (acct_date) "
+            "(PARTITION p20260919 VALUES LESS THAN ('20260920'), "
+            "PARTITION pmax VALUES LESS THAN (MAXVALUE))",
+            string_key.sql)
+        # long → oracle number：整数直接比较；分区键追加进主键
+        number_key = self._generate(dialect="oracle", create_partition=True,
+                                    partition_key="rec_id", partition_start="20260919",
+                                    partition_end="20260919")
+        self.assertIn(
+            "PARTITION BY RANGE (rec_id) "
+            "(PARTITION p20260919 VALUES LESS THAN (20260920))",
+            number_key.sql)
+        # rec_id 已在主键中，不重复追加
+        self.assertIn("add constraint pk_dist_order primary key (rec_id, acct_no)",
+                      number_key.sql)
+
+    def test_oracle_virtual_table_cannot_be_partitioned(self):
+        virtual_schema = self.root / "tables/Virtual.tables.xml"
+        virtual_schema.write_text('''<schema id="Virtual" package="demo.dist">
+  <table id="virt_tab" name="virt_tab" virtual="true">
+    <fields><field id="id" type="Base.U_ID" primarykey="true" nullable="false"/></fields>
+  </table>
+</schema>''', encoding="utf-8")
+        scan_workspace(self.root, self.db)
+        conn = connect(self.db, read_only=True)
+        try:
+            report = generate_all_ddl(conn, DdlGenConfig(
+                dialect="oracle", create_partition=True, partition_key="id",
+                partition_start="20260919"), ["Virtual.virt_tab"])
+        finally:
+            conn.close()
+        self.assertEqual("", report.sql)
+        self.assertTrue(any("cannot be partitioned" in e for e in report.errors))
+
+    def test_postgresql_partition_statements(self):
+        # PG：表尾仅输出分区头，分区定义为独立 PARTITION OF 语句
+        pg = self._generate(dialect="postgresql", create_partition=True,
+                            partition_key="acct_date", partition_start="20260919",
+                            partition_end="20260920")
+        self.assertEqual([], pg.errors)
+        self.assertIn(") PARTITION BY RANGE (acct_date);", pg.sql)
+        self.assertIn(
+            "create table dist_order_p20260919 partition of dist_order "
+            "for values from ('20260919') to ('20260920');",
+            pg.sql)
+        self.assertIn(
+            "create table dist_order_p20260920 partition of dist_order "
+            "for values from ('20260920') to ('20260921');",
+            pg.sql)
+        self.assertNotIn("pmax", pg.sql)
+        self.assertNotIn("partition of dist_order_p20260919", pg.sql)  # 分区表名不嵌套
+        # dateTime → PG timestamp：界值带 00:00:00 与横杠日期格式
+        ts_key = self._generate(dialect="postgresql", create_partition=True,
+                                partition_key="create_time", partition_start="20260919")
+        self.assertIn(
+            "for values from ('2026-09-19 00:00:00') to ('2026-09-20 00:00:00');",
+            ts_key.sql)
+        # 终止日期留空：DEFAULT 分区承担 MAXVALUE 兜底语义
+        fallback = self._generate(dialect="postgresql", create_partition=True,
+                                  partition_key="acct_date", partition_start="20260919")
+        self.assertIn(
+            "create table dist_order_pmax partition of dist_order default;",
+            fallback.sql)
+        # 分区键追加进主键（PG 分区表主键必须包含分区键）
+        self.assertIn("primary key (rec_id, acct_no, acct_date)", pg.sql)
 
     def test_shard_key_unique_index_warnings(self):
         # 分片键不在唯一索引/主键中：TDSQL 逐条告警，GoldenDB 告警主键缺失

@@ -256,6 +256,11 @@ _DISTRIBUTION_CLAUSE_RE = re.compile(
 # sqlglot 的 mysql 方言不识别 RANGE COLUMNS 关键字；校验前降级为 RANGE 做语法近似
 #（表达式与列类型的匹配由数据库在执行侧保证）
 _RANGE_COLUMNS_RE = re.compile(r"RANGE\s+COLUMNS", re.IGNORECASE)
+# sqlglot 的 oracle 方言不支持内联 RANGE 分区子句，校验前剥离（PG 的分区定义
+# 是独立 PARTITION OF 语句，其方言原生支持，无需剥离）
+_ORACLE_PARTITION_RE = re.compile(
+    r"\s+PARTITION\s+BY\s+RANGE(\s+COLUMNS)?\s*\([^)]*\)(\s*\([^;]*\))?",
+    re.IGNORECASE)
 
 
 def validate_ddl_sql(sql: str, dialect: str) -> Dict[str, Any]:
@@ -279,6 +284,8 @@ def validate_ddl_sql(sql: str, dialect: str) -> Dict[str, Any]:
     text = sql
     if dialect in ("tdsql", "goldendb"):
         text = _DISTRIBUTION_CLAUSE_RE.sub("", text)
+    if dialect == "oracle":
+        text = _ORACLE_PARTITION_RE.sub("", text)
     text = _RANGE_COLUMNS_RE.sub("RANGE", text)
     try:
         statements = [stmt for stmt in sqlglot.parse(text, read=DDL_DIALECTS[dialect])

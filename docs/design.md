@@ -1,7 +1,7 @@
 # APSGraph 设计文档
 
-> 版本：0.44.0
-> 更新时间：2026-09-21  
+> 版本：0.45.0
+> 更新时间：2026-09-22  
 > 文档定位：说明 APSGraph 的关键架构、模块设计、数据模型、算法、并发模型、性能设计和安全边界。
 
 ---
@@ -100,7 +100,7 @@
 | 模块 | 核心算法 |
 | impact | 从目标节点反向 BFS，按深度限制收集影响路径 |
 | refs | 正向 / 反向 / 双向图遍历 |
-| ddl / ddlgen | 模型字段解析、类型映射（含枚举子集 `<subenum>` 回溯所属枚举类型）、继承展开、方言模板（mysql/oracle/postgresql/tdsql/goldendb；tdsql 与 goldendb 复用 MySQL 映射，分布子句按 `shardkey=` / `DISTRIBUTED BY` 生成并做唯一索引-分片键约束告警；RANGE 按日分区子句按分区键 primitive 选择转换函数 `TO_DAYS`/`UNIX_TIMESTAMP`/`RANGE COLUMNS`/直接列，分区定义由 yyyymmdd 起止日期生成，终止留空以 MAXVALUE 兜底，全部分布/分区参数 fail-closed 校验且不写回元数据） |
+| ddl / ddlgen | 模型字段解析、类型映射（含枚举子集 `<subenum>` 回溯所属枚举类型）、继承展开、方言模板（mysql/oracle/postgresql/tdsql/goldendb；tdsql 与 goldendb 复用 MySQL 映射，分布子句按 `shardkey=` / `DISTRIBUTED BY` 生成并做唯一索引-分片键约束告警；RANGE 按日分区全方言支持——mysql 家族内联完整定义并按分区键 primitive 选转换函数 `TO_DAYS`/`UNIX_TIMESTAMP`/`RANGE COLUMNS`/直接列，oracle 内联 `TO_DATE`/`TO_TIMESTAMP` 界值且分区子句先于 tablespace、virtual 临时表禁止分区，postgresql 表尾仅分区头、分区定义为独立 `PARTITION OF` 语句（MAXVALUE 兜底对应 `default` 分区），分区定义由 yyyymmdd 起止日期生成、终止留空以 MAXVALUE 兜底，全部分布/分区参数 fail-closed 校验且不写回元数据） |
 | dbdiff | 模型 schema 与数据库 schema 规范化后对比 |
 | bridge | APS full_id 与生成 Java / CodeGraph 节点匹配 |
 | classify | 关键词与路径启发式分类 |
@@ -120,7 +120,7 @@
 - 多实例支持：`WorkbenchServer` 默认绑定端口 0，由操作系统分配随机空闲端口（URL 与实例注册表均记录实际端口），显式 `--port N` 可固定端口；绑定失败时以 JSON 错误退出（fail-closed，不自动降级）。Windows 上必须禁用 `SO_REUSEADDR`（`allow_reuse_address=False`，仅非 Windows 保留）——Windows 的 `SO_REUSEADDR` 允许重复绑定同一活动端口，两个实例会同时"成功"监听且不报任何冲突，请求被随机分流；POSIX 保留该选项仅用于快速重启绕过 TIME_WAIT。每个实例启动后把 `{port, pid, url, db, workspace, started_at}` 原子写入（临时文件 + `os.replace`）用户级注册表 `~/.apsgraph/workbench-registry.json`（环境变量 `APSGRAPH_WORKBENCH_REGISTRY` 可覆盖，测试与多用户隔离用），正常退出（Ctrl+C；POSIX 下 SIGTERM 经信号处理器转为 KeyboardInterrupt）时注销自身条目。
 - `workbench list`：读取注册表，对每个条目做双重存活校验——POSIX `os.kill(pid, 0)` / Windows `tasklist`（Windows 的 `os.kill` 非 CTRL 信号一律 TerminateProcess，不可用于探测）加 `/api/stats` HTTP 探测；存活实例按端口排序输出（默认人类可读表格，`--json` 机器格式），失效条目就地清理并计入 `pruned_stale`（注册表自愈）；`workbench close` 同样默认人类可读单行报告、`--json` 机器格式。
 - `workbench close`：先探测目标端口是否仍在响应 workbench `/api/stats`（确认注册表条目仍对应本工具实例，防止 pid 复用误杀无关进程），确认后 `os.kill(pid, SIGTERM)` 终止（Windows 映射为 TerminateProcess，只读服务无状态可刷写），随后从注册表移除条目；pid 已死按 `already_stopped` 清理、端口不再服务按 `stale` 清理（不杀进程）、终止抛错按 `failed` 保留条目、指定端口不存在按 `not_found` 返回退出码 2；`--all` 迭代全部条目。`close` 侧自行删除注册表条目，因此 Windows 上进程被硬终止也不会残留过期记录。
-- 前端为 `workbench_static/` 下的单页应用（vanilla HTML/JS/CSS），随 wheel 以 package-data 分发；mermaid 流程图库（mermaid@10.9.1 minified）同样打包进 `workbench_static/`，离线可用，加载失败时 flow 自动降级为缩进列表；流程图画布默认 0.6 缩放，提供工具栏（放大/缩小/重置/全屏）、滚轮缩放与拖拽平移（CSS transform 实现，pointer capture 拖拽），全屏为 fixed 弹层并提供“✕ 关闭全屏”按钮；左侧菜单可收起，结果列表默认 1/4 宽并由分隔条拖拽调节；结果分页（每页 50）、子孙树懒加载；结果列表只展示 `fullId/id：中文名`，详情属性过滤带命名空间的 XML 属性（如 `xsi:noNamespaceSchemaLocation`）。`/api/ddl` 复用 `ddlgen.generate_all_ddl` 对单个 TABLE 节点生成 MySQL/Oracle/PostgreSQL/TDSQL/GoldenDB 建表语句（只生成、不执行，与 `ddl-gen` 同一实现；TDSQL/GoldenDB 额外接收 `shard_type`/`shard_key`/`node_groups` 与 `create_partition`/`partition_key`/`partition_start`/`partition_end` 请求参数，非法组合返回 400），并用 `validate_ddl_sql` 以 sqlglot 按对应方言解析校验（可选依赖，惰性导入，未安装时返回跳过而非失败；tdsql/goldendb 校验前剥离 `shardkey=`/`DISTRIBUTED BY` 分布子句并把 `RANGE COLUMNS` 降级为 `RANGE` 做语法近似），前端在表详情提供弹窗（含表分片类型、分片键下拉及唯一索引归属标注与约束警示、GoldenDB 节点组输入框、RANGE 按日分区的分区键与起止日期输入）、校验结论展示与一键复制；搜索栏位于中栏顶部，直接过滤中间结果列表；详情表格列按元数据模型对象定义（输入输出/数据项为 `字典ID,字段,中文名,类型,必填,多值,默认值,固定值,描述,别名`，表字段为 `字典ID,字段,DbName,中文名,类型,可为空,默认值,描述,是否主键`；数据项行的 `字典ID` 在 ref 缺省时回退为节点自身 full_id），值符合模型 fullId 形态（正则 `^[A-Z]\w*(\.\w+)+$`，排除 Java 包名等小写开头值）的属性一律渲染为节点跳转链接（复用 `/api/node` 的 full_id/raw_id 兜底解析）；详情面板维护跳转历史栈并提供返回上一级按钮，页面切换时清空。
+- 前端为 `workbench_static/` 下的单页应用（vanilla HTML/JS/CSS），随 wheel 以 package-data 分发；mermaid 流程图库（mermaid@10.9.1 minified）同样打包进 `workbench_static/`，离线可用，加载失败时 flow 自动降级为缩进列表；流程图画布默认 0.6 缩放，提供工具栏（放大/缩小/重置/全屏）、滚轮缩放与拖拽平移（CSS transform 实现，pointer capture 拖拽），全屏为 fixed 弹层并提供“✕ 关闭全屏”按钮；左侧菜单可收起，结果列表默认 1/4 宽并由分隔条拖拽调节；结果分页（每页 50）、子孙树懒加载；结果列表只展示 `fullId/id：中文名`，详情属性过滤带命名空间的 XML 属性（如 `xsi:noNamespaceSchemaLocation`）。`/api/ddl` 复用 `ddlgen.generate_all_ddl` 对单个 TABLE 节点生成 MySQL/Oracle/PostgreSQL/TDSQL/GoldenDB 建表语句（只生成、不执行，与 `ddl-gen` 同一实现；TDSQL/GoldenDB 额外接收 `shard_type`/`shard_key`/`node_groups` 与 `create_partition`/`partition_key`/`partition_start`/`partition_end` 请求参数，非法组合返回 400），并用 `validate_ddl_sql` 以 sqlglot 按对应方言解析校验（可选依赖，惰性导入，未安装时返回跳过而非失败；tdsql/goldendb 校验前剥离 `shardkey=`/`DISTRIBUTED BY` 分布子句，oracle 剥离内联分区子句，`RANGE COLUMNS` 降级为 `RANGE` 做语法近似），前端在表详情提供弹窗（含表分片类型、分片键下拉及唯一索引归属标注与约束警示、GoldenDB 节点组输入框、RANGE 按日分区的分区键与起止日期输入、基准日期+粒度 D/M/Y+前置/后置分区数的快捷推算）、校验结论展示与一键复制；搜索栏位于中栏顶部，直接过滤中间结果列表；详情表格列按元数据模型对象定义（输入输出/数据项为 `字典ID,字段,中文名,类型,必填,多值,默认值,固定值,描述,别名`，表字段为 `字典ID,字段,DbName,中文名,类型,可为空,默认值,描述,是否主键`；数据项行的 `字典ID` 在 ref 缺省时回退为节点自身 full_id），值符合模型 fullId 形态（正则 `^[A-Z]\w*(\.\w+)+$`，排除 Java 包名等小写开头值）的属性一律渲染为节点跳转链接（复用 `/api/node` 的 full_id/raw_id 兜底解析）；详情面板维护跳转历史栈并提供返回上一级按钮，页面切换时清空。
 
 ### 3.6 原始 XML 与语义节点索引
 

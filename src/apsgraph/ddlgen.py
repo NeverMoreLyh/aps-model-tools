@@ -297,6 +297,10 @@ def _format_default(raw: str, primitive: str, conn: sqlite3.Connection, field_re
     upper = value.upper()
     if upper in FUNCTION_DEFAULTS:
         return upper
+    # APS 约定：default 值本身已是带引号的 SQL 字面量（如 '''' 这类转义写法）时
+    # 原样透传，避免二次转义产生多余引号
+    if len(value) >= 2 and value.startswith("'") and value.endswith("'"):
+        return value
     return "'" + value.replace("'", "''") + "'"
 
 

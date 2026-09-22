@@ -192,6 +192,32 @@ class DdlGenTest(unittest.TestCase):
         self.assertTrue(status.up_to_date,
                         "jar-imported files must not appear as workspace deletions/additions")
 
+    def test_quoted_sql_literal_defaults_pass_through(self):
+        # default 值本身已是带引号的 SQL 字面量（'''' / ''）时原样透传，
+        # 不做二次转义；普通字符串仍走包裹+转义路径
+        four_quotes = "'" * 4
+        two_quotes = "'" * 2
+        table = self.root / "tables/Defaults.tables.xml"
+        table.write_text(
+            '<schema id="Defaults" package="demo.tables">\n'
+            '  <table id="def_tab" name="def_tab">\n'
+            '    <fields>\n'
+            f'      <field id="c_empty" type="string" default="{four_quotes}"/>\n'
+            f'      <field id="c_pair" type="string" default="{two_quotes}"/>\n'
+            "      <field id=\"c_inner\" type=\"string\" default=\"a'b\"/>\n"
+            '      <field id="c_plain" type="string" default="Y"/>\n'
+            '    </fields>\n'
+            '  </table>\n'
+            '</schema>', encoding="utf-8")
+        scan_workspace(self.root, self.db)
+        report = self._generate("mysql")
+        # memo 字段的 KBaseType 依赖错误为既有预期（见 test_unresolved_dependency_type_*）
+        self.assertTrue(all("def_tab" not in e for e in report.errors))
+        self.assertIn("DEFAULT ''''", report.sql)
+        self.assertIn("DEFAULT ''", report.sql)
+        self.assertIn("DEFAULT 'a''b'", report.sql)  # 未包裹的值仍按规则转义包裹
+        self.assertIn("DEFAULT 'Y'", report.sql)
+
 
 class DistributedDdlTest(unittest.TestCase):
     """tdsql/goldendb 方言、表分片类型与 RANGE 分区（按日）的回归测试。"""

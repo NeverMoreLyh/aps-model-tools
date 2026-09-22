@@ -1,6 +1,6 @@
 # APS 元数据模型 → 数据库建表脚本：生成规则梳理
 
-> 版本：0.18.13
+> 版本：0.18.14
 
 > 依据 `aps-maven/aps-model-util` 源码与 FreeMarker 模板逆向整理，
 > 作为统一 DDL 生成工具（`apsgraph ddl-gen`）的实现基准。
@@ -37,7 +37,7 @@ Schema(types) → List<Table> → FreeMarker 模板(<dbtype>.ftl + sql_macro.ftl
 | 列长度 | `dbLength → maxLength → 父类型递归`；小数位 `dbFractionDigits → fractionDigits → 递归`；`byCharacter=true` 且配置了 DBRATIO 时长度×系数 | ModelUtil.getLength/getFractionDigits、TableDdlUtil.getFieldLengthString |
 | 无长度时默认 | 按默认长度表补（见 §3） | TableDdlUtil.getDefaultLength |
 | NOT NULL | `field.nullable==false` → `not null` | 各 .ftl |
-| 默认值 | `field.defaultValue`：`#` 开头取枚举值；数字类型原样；通用函数(CURRENT_TIMESTAMP 等)原样；其余加单引号 | DdlGenerator.getDefault() |
+| 默认值 | `field.defaultValue`：`#` 开头取枚举值；数字类型原样；通用函数(CURRENT_TIMESTAMP 等)原样；值本身已是带引号的 SQL 字面量（如 `''''`、`''`）时原样透传不二次转义；其余加单引号（内部引号转义为 `''`） | DdlGenerator.getDefault() |
 | 字段级索引属性 | `field.index=unique/index` 收集（MySQL/PG 模板收集但未实际落索引，Oracle 走 uniques） | 各 .ftl |
 | 物理索引来源 | `<indexes>` 容器（区别于 `<odbindexes>`，后者只驱动 DAO 操作不生成物理索引） | Table.getIndex() |
 | 主键兜底 | 无 field 级 primarykey 且无额外主键定义时，取第一个 primarykey/unique 索引字段为主键 | DdlGenerator.getKeys() |
